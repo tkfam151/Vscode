@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace · ClassCode</title>
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="ide">
+<header id="bar">
+  <a class="brand" href="./">ClassCode</a>
+  <span id="who"></span>
+  <span id="teacherBadge" class="badge" hidden>Teacher view</span>
+  <span id="live" class="pill" hidden></span>
+  <span class="spacer"></span>
+  <span id="idle" class="idle"></span>
+  <button id="run" class="btn primary small" title="Run the open file (Ctrl+Enter)">▶ Run</button>
+  <button id="previewBtn" class="btn small">Preview</button>
+  <a class="btn small" href="./">Dashboard</a>
+</header>
+<div id="main">
+  <aside id="side">
+    <div class="side-head">
+      <span>Files</span>
+      <span class="side-actions">
+        <button id="newFile" class="icon" title="New file">＋</button>
+        <button id="renameFile" class="icon" title="Rename file">✎</button>
+        <button id="deleteFile" class="icon" title="Delete file">🗑</button>
+      </span>
+    </div>
+    <ul id="files"></ul>
+    <label id="followWrap" class="follow" hidden><input type="checkbox" id="follow" checked> Follow student</label>
+  </aside>
+  <section id="work">
+    <div id="tabbar"><span id="filename"></span><span id="saved" class="muted small"></span></div>
+    <div id="editor"></div>
+    <div id="termhead"><span>Terminal</span><span id="termnote" class="muted small"></span></div>
+    <div id="terminal"></div>
+  </section>
+  <section id="preview" hidden>
+    <div class="side-head"><span id="previewName">Preview</span><button id="previewClose" class="icon" title="Close preview">✕</button></div>
+    <iframe id="previewFrame" title="Web page preview" sandbox="allow-scripts allow-modals allow-forms"></iframe>
+  </section>
+</div>
+<div id="overlay" class="overlay" hidden>
+  <div class="card launch">
+    <h2 id="overlayTitle"></h2>
+    <p id="overlayMsg" class="muted"></p>
+    <p><button id="overlayBtn" class="btn primary"></button> <a class="btn" href="./">Dashboard</a></p>
+  </div>
+</div>
+<!-- xterm and supabase must load before Monaco's loader (it defines an AMD `define`). -->
+<script src="vendor/xterm/xterm.js"></script>
+<script src="vendor/xterm/addon-fit.js"></script>
+<script src="vendor/supabase/supabase.js"></script>
+<script src="vendor/monaco/vs/loader.js"></script>
+<script type="module" src="js/workspace.js"></script>
+</body>
+</html>

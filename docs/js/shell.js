@@ -1,0 +1,395 @@
+// The student's terminal: a small shell over the workspace files, plus
+// runners for Python (Pyodide worker) and JavaScript (plain worker).
+// Everything here runs in the student's own browser tab.
+
+const HELP = `Commands
+  python FILE.py      run a Python program        python        interactive Python
+  node FILE.js        run a JavaScript program    pip install X install a Python package
+  preview [FILE.html] show a web page in the preview pane
+  ls [DIR]   cat FILE   cd DIR   pwd   mkdir DIR   touch FILE
+  rm [-r] PATH   mv FROM TO   cp FROM TO   echo TEXT [> FILE]   clear   help
+Keys: Ctrl+C stops a running program, Up/Down recall earlier commands.
+`;
+
+const crlf = (s) => s.replace(/\r?\n/g, '\r\n');
+
+/** Resolve `p` against `cwd`; both are project-relative without a leading slash. */
+export function resolvePath(cwd, p) {
+  const parts = p.startsWith('/') || p.startsWith('~') ? [] : cwd.split('/').filter(Boolean);
+  for (const seg of p.replace(/^~/, '').split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+function splitArgs(line) {
+  const args = [];
+  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(line))) args.push(m[1] !== undefined ? m[1].replace(/\\(.)/g, '$1') : m[2] !== undefined ? m[2] : m[3]);
+  return args;
+}
+
+const JS_WORKER = `
+const show = (v, depth = 0) => {
+  if (typeof v === 'string') return depth ? JSON.stringify(v) : v;
+  if (typeof v === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
+  if (v instanceof Error) return v.stack || String(v);
+  if (v === null || typeof v !== 'object') return String(v);
+  if (depth > 3) return Array.isArray(v) ? '[Array]' : '[Object]';
+  try {
+    if (Array.isArray(v)) return '[ ' + v.map((x) => show(x, depth + 1)).join(', ') + ' ]';
+    if (v instanceof Map) return 'Map(' + v.size + ') { ' + [...v].map(([k, x]) => show(k, depth + 1) + ' => ' + show(x, depth + 1)).join(', ') + ' }';
+    if (v instanceof Set) return 'Set(' + v.size + ') { ' + [...v].map((x) => show(x, depth + 1)).join(', ') + ' }';
+    const body = Object.entries(v).map(([k, x]) => k + ': ' + show(x, depth + 1)).join(', ');
+    const name = v.constructor && v.constructor.name !== 'Object' ? v.constructor.name + ' ' : '';
+    return name + (body ? '{ ' + body + ' }' : '{}');
+  } catch { return String(v); }
+};
+const out = (data) => postMessage({ type: 'out', data });
+for (const k of ['log', 'info', 'warn', 'error', 'debug']) console[k] = (...a) => out(a.map((x) => show(x)).join(' ') + '\\n');
+
+// Like Node, finish when the script and all its timers are done.
+let pending = 0, mainDone = false;
+const settle = () => { if (mainDone && pending === 0) postMessage({ type: 'done' }); };
+const _st = setTimeout, _ct = clearTimeout, _si = setInterval, _ci = clearInterval;
+const live = new Set();
+self.setTimeout = (fn, ms, ...a) => { pending++; const id = _st(() => { live.delete(id); try { fn(...a); } finally { pending--; settle(); } }, ms); live.add(id); return id; };
+self.clearTimeout = (id) => { if (live.delete(id)) { pending--; _ct(id); settle(); } };
+self.setInterval = (fn, ms, ...a) => { pending++; const id = _si(fn, ms, ...a); live.add(id); return id; };
+self.clearInterval = (id) => { if (live.delete(id)) { pending--; _ci(id); settle(); } };
+self.onerror = (e) => { out('Uncaught ' + (e.message || e) + '\\n'); };
+self.onunhandledrejection = (e) => { out('Uncaught (in promise) ' + show(e.reason) + '\\n'); };
+
+self.onmessage = async ({ data }) => {
+  try {
+    const AsyncFunction = (async () => {}).constructor;
+    await new AsyncFunction(data.code + '\\n//# sourceURL=' + data.name)();
+  } catch (e) {
+    out((e && e.stack && e.stack.includes(e.message) ? e.stack.split('\\n').slice(0, 4).join('\\n') : String(e)) + '\\n');
+  }
+  mainDone = true;
+  settle();
+};
+`;
+
+export class Session {
+  /**
+   * @param {object} o
+   * @param {(data: string) => void} o.write   raw terminal output (already \r\n)
+   * @param {import('./vfs.js').VFS} o.vfs
+   * @param {(path: string) => void} o.onPreview
+   */
+  constructor({ write, vfs, onPreview }) {
+    this.write = write;
+    this.vfs = vfs;
+    this.onPreview = onPreview;
+    this.cwd = '';
+    this.line = '';
+    this.history = [];
+    this.histPos = 0;
+    this.running = null; // { kill(), stdin(line), eof() }
+    this.pyWorker = null;
+    this.disposed = false;
+  }
+
+  start() {
+    this.write(crlf('Welcome to your ClassCode terminal. Type help to see what it can do.\n'));
+    this.prompt();
+  }
+
+  prompt() {
+    this.line = '';
+    this.histPos = this.history.length;
+    if (!this.disposed) this.write(`\x1b[1;32m~${this.cwd ? '/' + this.cwd : ''}\x1b[0m $ `);
+  }
+
+  print(text) {
+    if (!this.disposed) this.write(crlf(text));
+  }
+
+  /** Keystrokes from this tab's terminal or from the teacher. */
+  input(data) {
+    if (this.disposed) return;
+    for (let i = 0; i < data.length; i++) {
+      const ch = data[i];
+      if (ch === '\x1b') {
+        // escape sequence: only Up/Down are used
+        const seq = data.slice(i, i + 3);
+        if (seq === '\x1b[A' || seq === '\x1b[B') {
+          if (!this.running) this.recall(seq === '\x1b[A' ? -1 : 1);
+          i += 2;
+        } else {
+          const m = /^\x1b(\[[0-9;?]*[ -/]*[@-~]|O.|.)?/.exec(data.slice(i));
+          i += (m ? m[0].length : 1) - 1;
+        }
+      } else if (ch === '\r' || ch === '\n') {
+        if (ch === '\n' && data[i - 1] === '\r') continue;
+        this.write('\r\n');
+        const line = this.line;
+        this.line = '';
+        if (this.running) this.running.stdin(line);
+        else this.exec(line);
+      } else if (ch === '\x7f' || ch === '\b') {
+        if (this.line.length) {
+          this.line = this.line.slice(0, -1);
+          this.write('\b \b');
+        }
+      } else if (ch === '\x03') {
+        this.write('^C\r\n');
+        if (this.running) this.running.kill();
+        else this.prompt();
+      } else if (ch === '\x04') {
+        if (this.running && !this.line) this.running.eof();
+      } else if (ch === '\x0c') {
+        if (!this.running) {
+          this.write('\x1b[2J\x1b[3J\x1b[H');
+          this.prompt();
+        }
+      } else if (ch >= ' ' || ch === '\t') {
+        const c = ch === '\t' ? '    ' : ch;
+        this.line += c;
+        this.write(c);
+      }
+    }
+  }
+
+  recall(dir) {
+    const pos = this.histPos + dir;
+    if (pos < 0 || pos > this.history.length) return;
+    this.histPos = pos;
+    this.write('\b \b'.repeat(this.line.length));
+    this.line = this.history[pos] ?? '';
+    this.write(this.line);
+  }
+
+  /** Run a command as if it had been typed (used by the Run button). */
+  runCommand(cmd) {
+    if (this.disposed) return;
+    if (this.running) {
+      this.write('^C\r\n');
+      this.running.kill({ then: () => this.runCommand(cmd) });
+      return;
+    }
+    this.write('\b \b'.repeat(this.line.length) + cmd + '\r\n');
+    this.line = '';
+    this.exec(cmd);
+  }
+
+  async exec(raw) {
+    const line = raw.trim();
+    if (!line) return this.prompt();
+    if (this.history[this.history.length - 1] !== line) this.history.push(line);
+    if (this.history.length > 200) this.history.shift();
+
+    // echo-style redirect: CMD > file / CMD >> file
+    let redirect = null;
+    let cmdline = line;
+    const rm = /^(.*?)\s*(>>?)\s*(\S+)\s*$/.exec(line);
+    if (rm && /^(echo|cat|ls|pwd)\b/.test(rm[1])) {
+      cmdline = rm[1];
+      redirect = { append: rm[2] === '>>', path: resolvePath(this.cwd, rm[3]) };
+    }
+    const [cmd, ...args] = splitArgs(cmdline);
+    let output = '';
+    const say = (s) => (output += s);
+    const { vfs } = this;
+    const at = (p) => resolvePath(this.cwd, p);
+
+    try {
+      switch (cmd) {
+        case 'help':
+          say(HELP);
+          break;
+        case 'clear':
+          this.write('\x1b[2J\x1b[3J\x1b[H');
+          break;
+        case 'pwd':
+          say('~' + (this.cwd ? '/' + this.cwd : '') + '\n');
+          break;
+        case 'ls': {
+          const target = at(args.find((a) => !a.startsWith('-')) || '.');
+          if (vfs.has(target)) say(target.split('/').pop() + '\n');
+          else if (!vfs.isDir(target)) throw new Error(`ls: ${target}: No such file or directory`);
+          else {
+            const names = vfs.list(target).map((e) => (e.dir ? `\x1b[1;34m${e.name}/\x1b[0m` : e.name));
+            if (names.length) say(names.join(redirect ? '\n' : '  ') + '\n');
+          }
+          break;
+        }
+        case 'cd': {
+          const target = at(args[0] || '/');
+          if (!vfs.isDir(target)) throw new Error(`cd: ${args[0]}: No such directory`);
+          this.cwd = target;
+          break;
+        }
+        case 'cat':
+          if (!args.length) throw new Error('cat: which file?');
+          for (const a of args) {
+            if (!vfs.has(at(a))) throw new Error(`cat: ${a}: No such file`);
+            const text = vfs.get(at(a));
+            say(text.endsWith('\n') || !text ? text : text + '\n');
+          }
+          break;
+        case 'echo':
+          say(args.join(' ') + '\n');
+          break;
+        case 'mkdir':
+          if (!args.length) throw new Error('mkdir: which directory?');
+          for (const a of args.filter((x) => !x.startsWith('-'))) vfs.mkdir(at(a));
+          break;
+        case 'touch':
+          for (const a of args) if (!vfs.has(at(a))) vfs.set(checkName(at(a)), '');
+          break;
+        case 'rm': {
+          const recursive = args.some((a) => /^-[a-z]*r/i.test(a));
+          const targets = args.filter((a) => !a.startsWith('-'));
+          if (!targets.length) throw new Error('rm: which file?');
+          for (const a of targets) {
+            const p = at(a);
+            if (vfs.has(p)) vfs.delete(p);
+            else if (p && vfs.isDir(p)) {
+              if (!recursive) throw new Error(`rm: ${a}: is a directory (use rm -r)`);
+              vfs.rmdir(p);
+              if (this.cwd === p || this.cwd.startsWith(p + '/')) this.cwd = '';
+            } else throw new Error(`rm: ${a}: No such file or directory`);
+          }
+          break;
+        }
+        case 'mv':
+        case 'cp': {
+          if (args.length !== 2) throw new Error(`${cmd}: use ${cmd} FROM TO`);
+          const from = at(args[0]);
+          let to = at(args[1]);
+          if (!vfs.has(from)) throw new Error(`${cmd}: ${args[0]}: No such file`);
+          if (vfs.isDir(to) && !vfs.has(to)) to = (to ? to + '/' : '') + from.split('/').pop();
+          if (to === from) break;
+          vfs.set(checkName(to), vfs.get(from));
+          if (cmd === 'mv') vfs.delete(from);
+          break;
+        }
+        case 'preview':
+        case 'open': {
+          const p = at(args[0] || 'index.html');
+          if (!vfs.has(p)) throw new Error(`preview: ${args[0] || 'index.html'}: No such file`);
+          this.onPreview(p);
+          break;
+        }
+        case 'python':
+        case 'python3':
+        case 'py': {
+          const file = args.find((a) => !a.startsWith('-'));
+          if (!file) return this.runPython({ type: 'repl' });
+          const entry = at(file);
+          if (!vfs.has(entry)) throw new Error(`python: can't open file '${file}': No such file`);
+          return this.runPython({ type: 'run', entry, argv: args.slice(args.indexOf(file) + 1) });
+        }
+        case 'pip':
+        case 'pip3': {
+          if (args[0] !== 'install' || args.length < 2) throw new Error('Use: pip install PACKAGE');
+          return this.runPython({ type: 'pip', packages: args.slice(1).filter((a) => !a.startsWith('-')) });
+        }
+        case 'node':
+        case 'js': {
+          if (!args[0]) throw new Error('Use: node FILE.js');
+          const p = at(args[0]);
+          if (!vfs.has(p)) throw new Error(`node: cannot find '${args[0]}'`);
+          return this.runJs(p);
+        }
+        default:
+          throw new Error(`${cmd}: command not found. Type help to see what this terminal can do.`);
+      }
+      if (redirect) {
+        const text = output.replace(/\x1b\[[0-9;]*m/g, '');
+        vfs.set(checkName(redirect.path), redirect.append ? (vfs.get(redirect.path) || '') + text : text);
+      } else this.print(output);
+    } catch (e) {
+      this.print(e.message + '\n');
+    }
+    this.prompt();
+  }
+
+  // ------------------------------------------------------------ runners --
+
+  ensurePyWorker() {
+    if (!this.pyWorker) {
+      this.pyWorker = new Worker(new URL('./py-worker.js', import.meta.url), { type: 'module' });
+      this.pyFresh = true;
+    }
+    return this.pyWorker;
+  }
+
+  runPython(job) {
+    const worker = this.ensurePyWorker();
+    if (this.pyFresh) {
+      this.print('\x1b[2mStarting Python...\x1b[0m\n');
+      this.pyFresh = false;
+    }
+    const sent = this.vfs.entries();
+    const finish = (after) => {
+      this.running = null;
+      worker.onmessage = null;
+      this.prompt();
+      after?.then?.();
+    };
+    worker.onerror = (e) => {
+      this.print(`Python stopped unexpectedly: ${e.message || 'worker error'}\n`);
+      this.killPython();
+      finish();
+    };
+    worker.onmessage = ({ data }) => {
+      if (data.type === 'out') this.print(data.data);
+      else if (data.type === 'done') {
+        for (const [path, content] of data.changed) this.vfs.set(path, content, 'program');
+        for (const path of data.deleted) if (this.vfs.get(path) === new Map(sent).get(path)) this.vfs.delete(path, 'program');
+        finish();
+      }
+    };
+    this.running = {
+      stdin: (line) => worker.postMessage({ type: 'stdin', line }),
+      eof: () => worker.postMessage({ type: 'eof' }),
+      // A busy Python loop cannot be interrupted politely, so stop the worker; the next run starts a new one.
+      kill: (after) => {
+        this.killPython();
+        finish(after);
+      },
+    };
+    worker.postMessage({ ...job, files: sent });
+  }
+
+  killPython() {
+    this.pyWorker?.terminate();
+    this.pyWorker = null;
+  }
+
+  runJs(path) {
+    const url = URL.createObjectURL(new Blob([JS_WORKER], { type: 'text/javascript' }));
+    const worker = new Worker(url);
+    const finish = (after) => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      this.running = null;
+      this.prompt();
+      after?.then?.();
+    };
+    worker.onmessage = ({ data }) => {
+      if (data.type === 'out') this.print(data.data);
+      else if (data.type === 'done') finish();
+    };
+    this.running = { stdin: () => {}, eof: () => {}, kill: finish };
+    worker.postMessage({ code: this.vfs.get(path), name: path });
+  }
+
+  dispose() {
+    this.disposed = true;
+    if (this.running) this.running.kill();
+    this.killPython();
+  }
+}
+
+function checkName(path) {
+  if (!path || path.length > 200 || /[\x00-\x1f\\]/.test(path)) throw new Error('That file name is not allowed');
+  return path;
+}

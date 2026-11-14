@@ -1,0 +1,34 @@
+// Picks the data layer: Supabase when configured, otherwise the in-browser demo.
+//
+// Both implementations expose the same async API:
+//   init() -> user | null                user = { id, displayName, role }
+//   signUp({ email, password, displayName, role }) -> user
+//   signIn({ email, password }) -> user
+//   signOut()
+//   listClasses()        teacher: [{ id, name, joinCode, studentCount }]
+//                        student: [{ id, name, teacherName, workspaceId }]
+//   createClass(name) -> { id }
+//   deleteClass(id)
+//   getRoster(classId) -> { class: { id, name, joinCode }, students: [{ workspaceId, studentId, displayName }] }
+//   joinClass(code)
+//   removeStudent(workspaceId)
+//   getWorkspace(id) -> { id, classId, className, studentId, studentName, role: 'student' | 'teacher' }
+//   listFiles(workspaceId) -> [{ path, content }]
+//   saveFile(workspaceId, path, content)
+//   deleteFile(workspaceId, path)
+//   channel(name) -> live channel, see below
+//
+// A live channel relays messages between everyone allowed on it:
+//   await ch.ready
+//   ch.on(event, (payload) => {})
+//   ch.send(event, payload)
+//   ch.track(state)            announce "I am here" (presence)
+//   ch.onPresence((states) => {})
+//   ch.close()
+
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../config.js';
+
+export const demoMode = !SUPABASE_URL || !SUPABASE_ANON_KEY;
+
+const mod = demoMode ? await import('./backend-local.js') : await import('./backend-supabase.js');
+export const backend = demoMode ? mod.create() : mod.create(SUPABASE_URL, SUPABASE_ANON_KEY);

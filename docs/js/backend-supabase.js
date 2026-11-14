@@ -1,0 +1,126 @@
+// Supabase data layer. Tables, access rules and the functions called here are
+// defined in supabase/schema.sql.
+
+/* global supabase */
+
+export function create(url, anonKey) {
+  const sb = supabase.createClient(url, anonKey);
+
+  const ok = ({ data, error }) => {
+    if (error) throw new Error(friendly(error.message));
+    return data;
+  };
+
+  const friendly = (msg) => {
+    if (/invalid login credentials/i.test(msg)) return 'Wrong email or password';
+    if (/already registered/i.test(msg)) return 'That email already has an account';
+    if (/email not confirmed/i.test(msg)) return 'Check your email and confirm your account first';
+    return msg;
+  };
+
+  const profile = async (authUser) => {
+    if (!authUser) return null;
+    const row = ok(await sb.from('profiles').select('id, display_name, role').eq('id', authUser.id).maybeSingle());
+    return row ? { id: row.id, displayName: row.display_name, role: row.role } : null;
+  };
+
+  return {
+    async init() {
+      const { data } = await sb.auth.getSession();
+      return profile(data.session?.user);
+    },
+
+    async signUp({ email, password, displayName, role }) {
+      const data = ok(
+        await sb.auth.signUp({ email: email.trim(), password, options: { data: { display_name: displayName.trim(), role } } }),
+      );
+      if (!data.session) throw new Error('Account created. Check your email to confirm it, then sign in.');
+      return profile(data.user);
+    },
+
+    async signIn({ email, password }) {
+      const data = ok(await sb.auth.signInWithPassword({ email: email.trim(), password }));
+      return profile(data.user);
+    },
+
+    async signOut() {
+      await sb.auth.signOut();
+    },
+
+    async listClasses() {
+      return ok(await sb.rpc('my_classes')) || [];
+    },
+
+    async createClass(name) {
+      return ok(await sb.rpc('create_class', { p_name: name }));
+    },
+
+    async deleteClass(id) {
+      ok(await sb.from('classes').delete().eq('id', id));
+    },
+
+    async getRoster(classId) {
+      const data = ok(await sb.rpc('class_roster', { p_class: classId }));
+      if (!data) throw new Error('Class not found');
+      return data;
+    },
+
+    async joinClass(code) {
+      ok(await sb.rpc('join_class', { p_code: code }));
+    },
+
+    async removeStudent(workspaceId) {
+      ok(await sb.from('enrollments').delete().eq('id', workspaceId));
+    },
+
+    async getWorkspace(id) {
+      const data = ok(await sb.rpc('workspace_info', { p_ws: id }));
+      if (!data) throw new Error('Workspace not found');
+      return data;
+    },
+
+    async listFiles(workspaceId) {
+      return ok(await sb.from('files').select('path, content').eq('workspace_id', workspaceId));
+    },
+
+    async saveFile(workspaceId, path, content) {
+      ok(await sb.from('files').upsert({ workspace_id: workspaceId, path, content, updated_at: new Date().toISOString() }));
+    },
+
+    async deleteFile(workspaceId, path) {
+      ok(await sb.from('files').delete().eq('workspace_id', workspaceId).eq('path', path));
+    },
+
+    channel(name) {
+      // private: true -> Supabase checks the realtime rules in schema.sql before
+      // letting anyone listen or send on this channel.
+      const ch = sb.channel(name, { config: { private: true, broadcast: { self: false } } });
+      const handlers = new Map();
+      let presenceCb = null;
+      ch.on('broadcast', { event: '*' }, ({ event, payload }) => handlers.get(event)?.(payload));
+      ch.on('presence', { event: 'sync' }, () => presenceCb?.(Object.values(ch.presenceState()).flat()));
+      const ready = (async () => {
+        await sb.realtime.setAuth();
+        await new Promise((resolve, reject) => {
+          ch.subscribe((status, err) => {
+            if (status === 'SUBSCRIBED') resolve();
+            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') reject(err || new Error('Could not connect to the live channel'));
+          });
+        });
+      })();
+      ready.catch(() => {});
+      return {
+        ready,
+        on: (event, cb) => handlers.set(event, cb),
+        send: (event, payload) => ch.send({ type: 'broadcast', event, payload }),
+        track: (state) => ch.track(state),
+        untrack: () => ch.untrack(),
+        onPresence(cb) {
+          presenceCb = cb;
+          cb(Object.values(ch.presenceState()).flat());
+        },
+        close: () => sb.removeChannel(ch),
+      };
+    },
+  };
+}

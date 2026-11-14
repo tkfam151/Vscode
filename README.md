@@ -1,93 +1,86 @@
 # ClassCode
 
-A self-hosted classroom platform that gives every student their own VS Code in the browser, served straight from your server's IP address.
+A coding classroom that runs on **GitHub Pages + Supabase**. No server to rent or look after.
 
 - **Teachers** create an account, create classes, and get a join code for each class.
-- **Students** create an account, join a class with the code, and get their own private VS Code (editor + terminal) for that class.
-- **Teachers can open any student's workspace** in their classes — same files, same environment, with their own terminal in it.
-- **Workspaces close after 1 hour without activity.** The student (or teacher) has to reopen it from the dashboard each time it closes. Files are kept between sessions.
+- **Students** create an account, join with the code, and get their own workspace: a VS Code-style editor, a terminal, and a web-page preview.
+- **Teachers watch any student's terminal live**, see their files update as they type, and can type into the student's terminal themselves.
+- **Workspaces close after 1 hour without activity.** The student has to reopen it each time; their files are kept.
 
-Each workspace is a [code-server](https://github.com/coder/code-server) instance running in its own Docker container.
+Students can run:
 
-## Run it
+| | How |
+| --- | --- |
+| **Python** | `python main.py`, an interactive `python` prompt, `input()`, reading and writing files |
+| **JavaScript** | `node app.js` |
+| **Web pages** | HTML/CSS/JS with a live preview pane |
+| **Shell basics** | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `echo > file`, `clear`, `help` |
 
-Requirements: Linux server, Node.js 22.13+, Docker. There are no npm dependencies to install.
+## What this is not
 
-```bash
-docker pull codercom/code-server:latest   # once, so the first student doesn't wait for the download
-npm start
+The terminal runs inside the student's own browser tab. It is **not a real Linux machine**: there is no `apt`, `git`, `gcc`, Java, or other system software, and programs cannot open network servers. If you need that, use the server version in this repository instead — see [SERVER.md](SERVER.md). It needs a Linux server but gives every student the real VS Code and a real Linux terminal.
+
+## Try it first (no setup)
+
+Until you add Supabase details, the site runs in **demo mode**: accounts and files are stored in your browser only. Open the site in two tabs, sign up as a teacher in one and a student in the other, and you can try everything, including the live teacher view.
+
+## Setup
+
+### 1. Create the Supabase project
+
+1. Sign up at [supabase.com](https://supabase.com) and create a new project (the free plan is enough to start).
+2. Open **SQL Editor**, paste in the whole of [`supabase/schema.sql`](supabase/schema.sql), and press **Run**.
+3. Open **Authentication → Sign In / Providers → Email** and turn **Confirm email** off.
+   With it on, Supabase's built-in mailer only sends a few emails per hour, so a class signing up together would get stuck. (If you want confirmation emails, set up your own SMTP provider in Supabase instead.)
+4. Open **Realtime → Settings** and turn **Allow public access** off, so live channels can only be used by people the database rules allow.
+5. Open **Project Settings → API** and copy the **Project URL** and the **anon public** key.
+
+### 2. Add your project details to the site
+
+Edit [`docs/config.js`](docs/config.js):
+
+```js
+export const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+export const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
 ```
 
-Then browse to `http://<server-ip>:8080`.
+Both values are meant to be public. What each person can see or change is enforced by the rules in `schema.sql`, not by keeping the key secret. Never put the **service_role** key here.
 
-Open these ports in your firewall:
+### 3. Turn on GitHub Pages
 
-| Port | Purpose |
-| --- | --- |
-| `8080` | Dashboard (sign in, classes) |
-| `9000–9199` | One port per running workspace, e.g. `http://<server-ip>:9000` |
+In the repository on GitHub: **Settings → Pages → Build and deployment → Deploy from a branch**, choose your branch and the **`/docs`** folder, and save. After a minute the site is live at `https://<your-username>.github.io/<repository>/`.
 
-The user running `npm start` must be allowed to use Docker.
+Give that address to your students.
 
 ## How it works
 
 ```
-browser ──► :8080            dashboard + API (accounts, classes, start/stop)
-browser ──► :9000, :9001 …   one authenticated proxy port per running workspace
-                 │
-                 └──► 127.0.0.1:<private port> ──► student's container (code-server)
+GitHub Pages   serves the site (editor, terminal, Python runtime) as plain files
+Supabase       accounts, classes, saved files, and the live relay between student and teacher
+Browser        runs the student's code
 ```
 
-- Opening a workspace starts the student's container, picks a free port, and sends the browser there with a one-time link. Only that student and the class's teacher can get a link.
-- The workspace page tracks real input (keys, mouse, touch). An open-but-untouched tab does not count as activity. After the idle timeout the container is stopped and the port closes; the page shows a "Reopen workspace" button.
-- Files live in a Docker volume per student per class (`classcode-ws-<id>`), mounted at `/home/coder`. Removing a student from a class or deleting the class deletes the volume.
-- Stopping the server (Ctrl+C / SIGTERM) closes all running workspaces.
+- **Running code**: Python runs through [Pyodide](https://pyodide.org) (Python compiled for the browser), JavaScript runs in a browser worker, and web pages render in a sandboxed frame that cannot touch the rest of the site.
+- **Live view**: the student's tab sends terminal output and file edits over a private Supabase Realtime channel. The teacher's tab shows them and sends keystrokes back. Only the student and the teacher of that class can join a workspace's channel.
+- **Idle close**: the workspace page watches for keyboard, mouse and touch input (the teacher typing also counts). After `IDLE_MINUTES` (set in `docs/config.js`, default 60) the session ends and a "Reopen workspace" button appears. Closing the tab also closes the workspace.
+- **Files** are saved to Supabase as the student types: up to 200 files per workspace, 256 KB each, text only.
 
-## Configuration
+## Things to know
 
-Set these as environment variables.
+- **Use Chrome or Edge.** Python's `input()` relies on a browser feature that Firefox and Safari may not have yet. Everything else works in any modern browser.
+- **Extra Python packages** (`numpy`, `pandas`, `matplotlib`, or `pip install <name>`) are downloaded from the Pyodide CDN (`cdn.jsdelivr.net`) the first time they are imported. If your school network blocks that address, only the standard library is available. This download path could not be tested in the build environment, so try `import numpy` once before relying on it.
+- **Anyone who finds the site can sign up as a teacher.** A teacher account only controls its own classes, so this does not expose other classes, but it does use your Supabase quota. To lock it down, turn off sign-ups in Supabase once your accounts exist.
+- **A student's code runs on the student's own device.** A slow laptop means slow programs, and Ctrl+C stops a runaway program by restarting Python.
+- **Teachers can read files and use the terminal, not edit files directly** in the editor. Use the terminal (`echo`, running code) or ask the student.
+- **Supabase free plan limits** apply (database size, simultaneous live connections, messages per month). A typical single class is well inside them; check Supabase's pricing page if you plan to run many classes at once.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `PORT` | `8080` | Dashboard port |
-| `HOST` | `0.0.0.0` | Address to listen on |
-| `PUBLIC_HOST` | (from browser) | IP/hostname to put in workspace links, if different from what users type |
-| `IDLE_TIMEOUT_MINUTES` | `60` | Close a workspace after this long without activity |
-| `WORKSPACE_PORT_START` | `9000` | First workspace port |
-| `WORKSPACE_PORT_COUNT` | `200` | Number of ports = max workspaces open at once |
-| `WORKSPACE_IMAGE` | `codercom/code-server:latest` | Container image for workspaces |
-| `WORKSPACE_MEMORY` | `1g` | Memory limit per workspace |
-| `WORKSPACE_CPUS` | `1` | CPU limit per workspace |
-| `WORKSPACE_PIDS_LIMIT` | `512` | Process limit per workspace |
-| `TEACHER_SIGNUP_CODE` | (none) | If set, creating a teacher account requires this code |
-| `TLS_CERT`, `TLS_KEY` | (none) | Paths to a certificate and key; serves everything over HTTPS |
-| `DATA_DIR` | `./data` | Where the SQLite database is stored |
-| `WORKSPACE_DRIVER` | `docker` | `process` runs code-server directly on the host (development only, no isolation) |
-| `CODE_SERVER_BIN` | `code-server` | Binary used by the `process` driver |
+## Repository layout
 
-Rough sizing: budget `WORKSPACE_MEMORY` per student who has a workspace open at the same time.
-
-To give students extra tools (Python, Java, …), build an image `FROM codercom/code-server` that installs them and set `WORKSPACE_IMAGE`.
-
-## Things to know before putting it in front of a class
-
-- **Use HTTPS if you can.** Over plain `http://<ip>`, passwords travel unencrypted and browsers disable some VS Code features (clipboard access, webviews such as Markdown preview). The editor and terminal work either way. Set `TLS_CERT`/`TLS_KEY` to enable HTTPS; the same certificate is used for the dashboard and every workspace port.
-- **Set `TEACHER_SIGNUP_CODE`** on a server reachable from the internet. Otherwise anyone can create a teacher account (they would only control their own classes, but could still start containers on your server).
-- **Students have root inside their own container** (the stock code-server image has passwordless `sudo`) and outbound internet access. Containers are resource-limited and cannot reach each other, but treat the server as one that runs untrusted code.
-- A teacher and a student in the same workspace share files and can each open terminals; they do not see each other's keystrokes inside one terminal.
-
-## Development
-
-```bash
-npm test        # end-to-end tests of accounts, classes, access control, the proxy and idle shutdown
-```
-
-Layout:
-
-- `server.js` – entry point
-- `src/api.js` – dashboard API and static files
-- `src/workspaces.js` – workspace lifecycle, per-workspace proxy, idle reaper
-- `src/drivers.js` – Docker and local-process launchers
-- `src/shell.html` – the page that wraps VS Code and reports activity
-- `src/db.js` – SQLite schema and queries
-- `public/` – dashboard UI
+| Path | What |
+| --- | --- |
+| `docs/` | The GitHub Pages site |
+| `docs/config.js` | Supabase details and the idle timeout |
+| `docs/js/` | Dashboard, workspace page, terminal/shell, Python worker, data layers |
+| `docs/vendor/` | Bundled libraries: Monaco editor, xterm.js, Pyodide, supabase-js |
+| `supabase/schema.sql` | Tables, access rules and functions |
+| `server.js`, `src/`, `public/`, `test/` | The separate server version ([SERVER.md](SERVER.md)) |
