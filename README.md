@@ -2,9 +2,11 @@
 
 A coding classroom that runs on **GitHub Pages + Supabase**. No server to rent or look after.
 
-- **Teachers** create an account, create classes, and get a join code for each class.
-- **Students** create an account, join with the code, and get their own workspace: a VS Code-style editor, a terminal, and a web-page preview.
-- **Teachers watch any student's terminal live**, see their files update as they type, and can type into the student's terminal themselves.
+- **Admins** create teacher accounts. The teacher gets an email with a link and chooses their own password. Nobody can sign up as a teacher on the website.
+- **Teachers** create classes and get a join code for each class.
+- **Students** create their own account, join with the code, and get their own workspace: a VS Code-style editor, a terminal, and a web-page preview.
+- **Teachers watch any student's terminal live**, can type into it, and can **edit the student's files and press Run**. When the student isn't there, the teacher can still open the workspace, edit and run the code (it runs in the teacher's own browser).
+- **Admins can open every class and every student's workspace**, with the same abilities as the class's teacher.
 - **Workspaces close after 1 hour without activity.** The student has to reopen it each time; their files are kept.
 
 Students can run:
@@ -22,20 +24,21 @@ The terminal runs inside the student's own browser tab. It is **not a real Linux
 
 ## Try it first (no setup)
 
-Until you add Supabase details, the site runs in **demo mode**: accounts and files are stored in your browser only. Open the site in two tabs, sign up as a teacher in one and a student in the other, and you can try everything, including the live teacher view.
+Until you add Supabase details, the site runs in **demo mode**: accounts and files are stored in your browser only, and no emails are sent. The first account you create becomes the admin. From **Manage teachers** you can invite a teacher; demo mode shows the "set password" link on screen instead of emailing it. Use a second tab as the teacher and a third as a student to try the live view.
 
 ## Setup
 
-### 1. Create the Supabase project
+You need a free [Supabase](https://supabase.com) account and an email-sending account (see step 3).
 
-1. Sign up at [supabase.com](https://supabase.com) and create a new project (the free plan is enough to start).
-2. Open **SQL Editor**, paste in the whole of [`supabase/schema.sql`](supabase/schema.sql), and press **Run**.
-3. Open **Authentication → Sign In / Providers → Email** and turn **Confirm email** off.
-   With it on, Supabase's built-in mailer only sends a few emails per hour, so a class signing up together would get stuck. (If you want confirmation emails, set up your own SMTP provider in Supabase instead.)
+### 1. Create the Supabase project and database
+
+1. Create a new project in Supabase (the free plan is enough to start).
+2. Open **SQL Editor**, paste in the whole of [`supabase/schema.sql`](supabase/schema.sql), and press **Run**. (If you set up an earlier version, run it again: it updates in place.)
+3. Open **Authentication → Sign In / Providers → Email** and turn **Confirm email** off, so students can sign in straight after signing up.
 4. Open **Realtime → Settings** and turn **Allow public access** off, so live channels can only be used by people the database rules allow.
 5. Open **Project Settings → API** and copy the **Project URL** and the **anon public** key.
 
-### 2. Add your project details to the site
+### 2. Add your project details to the site and turn on GitHub Pages
 
 Edit [`docs/config.js`](docs/config.js):
 
@@ -44,13 +47,39 @@ export const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
 export const SUPABASE_ANON_KEY = 'YOUR-ANON-PUBLIC-KEY';
 ```
 
-Both values are meant to be public. What each person can see or change is enforced by the rules in `schema.sql`, not by keeping the key secret. Never put the **service_role** key here.
+Both values are meant to be public: what each person can see or change is enforced by `schema.sql`. Never put the **service_role** key in the site.
 
-### 3. Turn on GitHub Pages
+Then in the repository on GitHub: **Settings → Pages → Deploy from a branch**, choose your branch and the **`/docs`** folder, and save. The site appears at `https://<your-username>.github.io/<repository>/`.
 
-In the repository on GitHub: **Settings → Pages → Build and deployment → Deploy from a branch**, choose your branch and the **`/docs`** folder, and save. After a minute the site is live at `https://<your-username>.github.io/<repository>/`.
+### 3. Set up email (needed for teacher invites)
 
-Give that address to your students.
+Supabase's built-in email only delivers to the members of your Supabase project and only a few per hour, so invites to your teachers would not arrive. Use your own email provider:
+
+1. Get SMTP details from an email service (for example Resend, Brevo, SendGrid, Amazon SES, or your school's Google Workspace / Microsoft 365 mail).
+2. In Supabase open **Authentication → Emails → SMTP Settings**, turn on **custom SMTP**, and enter the host, port, username, password and sender address.
+3. Open **Authentication → URL Configuration**. Set **Site URL** to your Pages address (`https://<your-username>.github.io/<repository>/`) and add `https://<your-username>.github.io/<repository>/set-password.html` under **Redirect URLs**. The invite link only works with this in place.
+4. Optional: in **Authentication → Emails → Templates**, edit the **Invite user** email (for example "You've been added as a teacher on ClassCode").
+
+### 4. Deploy the admin-users function
+
+Creating teacher accounts and sending invites needs Supabase's secret service-role key, so it runs on Supabase as an Edge Function, not in the website. Either:
+
+- **In the Supabase dashboard:** **Edge Functions → Deploy a new function → Via Editor**, name it exactly `admin-users`, replace the example code with the contents of [`supabase/functions/admin-users/index.ts`](supabase/functions/admin-users/index.ts), and deploy.
+- **Or with the Supabase CLI:** `supabase functions deploy admin-users --project-ref <your-project-ref>` from this repository.
+
+The function reads the project URL and service-role key that Supabase provides to every function; there is nothing else to configure.
+
+### 5. Make yourself the first admin
+
+1. Open the site and create an account with your own email (it starts as a student account).
+2. In Supabase's **SQL Editor**, run this with your email:
+
+```sql
+update public.profiles set role = 'admin'
+where id = (select id from auth.users where email = 'you@yourschool.org');
+```
+
+3. Sign out and back in. You'll see **Manage teachers**, where you invite your teachers (and, if you want, other admins).
 
 ## How it works
 
@@ -61,7 +90,8 @@ Browser        runs the student's code
 ```
 
 - **Running code**: Python runs through [Pyodide](https://pyodide.org) (Python compiled for the browser), JavaScript runs in a browser worker, and web pages render in a sandboxed frame that cannot touch the rest of the site.
-- **Live view**: the student's tab sends terminal output and file edits over a private Supabase Realtime channel. The teacher's tab shows them and sends keystrokes back. Only the student and the teacher of that class can join a workspace's channel.
+- **Live view**: the student's tab sends terminal output and file edits over a private Supabase Realtime channel. The teacher's tab shows them and sends back keystrokes, file edits and Run. Only the student, the class's teacher and admins can join a workspace's channel.
+- **Accounts**: everyone who signs up on the site is a student. The `admin-users` function invites teachers by email and gives them the teacher role; the "set password" link lands on `set-password.html`. On **Manage teachers** an admin can resend an invite, send a password-reset email to a teacher who has forgotten theirs, or remove a teacher (which also deletes that teacher's classes and the students' work in them).
 - **Idle close**: the workspace page watches for keyboard, mouse and touch input (the teacher typing also counts). After `IDLE_MINUTES` (set in `docs/config.js`, default 60) the session ends and a "Reopen workspace" button appears. Closing the tab also closes the workspace.
 - **Files** are saved to Supabase as the student types: up to 200 files per workspace, 256 KB each, text only.
 
@@ -69,9 +99,10 @@ Browser        runs the student's code
 
 - **Use Chrome or Edge.** Python's `input()` relies on a browser feature that Firefox and Safari may not have yet. Everything else works in any modern browser.
 - **Extra Python packages** (`numpy`, `pandas`, `matplotlib`, or `pip install <name>`) are downloaded from the Pyodide CDN (`cdn.jsdelivr.net`) the first time they are imported. If your school network blocks that address, only the standard library is available. This download path could not be tested in the build environment, so try `import numpy` once before relying on it.
-- **Anyone who finds the site can sign up as a teacher.** A teacher account only controls its own classes, so this does not expose other classes, but it does use your Supabase quota. To lock it down, turn off sign-ups in Supabase once your accounts exist.
+- **Anyone who finds the site can create a student account.** Without a join code it can't see any class, but it does use your Supabase quota.
+- **Students can't reset a forgotten password themselves yet.** An admin can send password resets to teachers from **Manage teachers**; for a student, delete their account in Supabase (**Authentication → Users**) and have them sign up again, or set a new password there.
 - **A student's code runs on the student's own device.** A slow laptop means slow programs, and Ctrl+C stops a runaway program by restarting Python.
-- **Teachers can read files and use the terminal, not edit files directly** in the editor. Use the terminal (`echo`, running code) or ask the student.
+- **When a teacher and student type in the same file at once**, both edits are kept, but if they type on the same line at the same moment the result can be jumbled. In practice, take turns on a line.
 - **Supabase free plan limits** apply (database size, simultaneous live connections, messages per month). A typical single class is well inside them; check Supabase's pricing page if you plan to run many classes at once.
 
 ## Repository layout
@@ -83,4 +114,5 @@ Browser        runs the student's code
 | `docs/js/` | Dashboard, workspace page, terminal/shell, Python worker, data layers |
 | `docs/vendor/` | Bundled libraries: Monaco editor, xterm.js, Pyodide, supabase-js |
 | `supabase/schema.sql` | Tables, access rules and functions |
+| `supabase/functions/admin-users/` | Edge Function: invite, resend and remove teacher accounts |
 | `server.js`, `src/`, `public/`, `test/` | The separate server version ([SERVER.md](SERVER.md)) |

@@ -31,7 +31,6 @@ const workspaceUrl = (id) => `workspace.html?ws=${encodeURIComponent(id)}`;
 
 function authView() {
   let mode = 'login';
-  let role = 'student';
   const container = h('div', { class: 'center' });
 
   const draw = () => {
@@ -47,7 +46,7 @@ function authView() {
           const button = form.querySelector('button[type=submit]');
           button.disabled = true;
           try {
-            me = signup ? await backend.signUp({ ...f, role }) : await backend.signIn(f);
+            me = signup ? await backend.signUp(f) : await backend.signIn(f);
             if (!me) throw new Error('Your account has no profile yet. Ask your teacher to check the Supabase setup.');
             render();
           } catch (e) {
@@ -57,15 +56,7 @@ function authView() {
         },
       },
       h('h1', {}, 'ClassCode'),
-      h('p', { class: 'muted' }, 'Write and run code in your browser, together with your class.'),
-      signup &&
-        h(
-          'div',
-          { class: 'seg' },
-          ['student', 'teacher'].map((r) =>
-            h('button', { type: 'button', class: role === r ? 'active' : '', onclick: () => ((role = r), draw()) }, r === 'student' ? "I'm a student" : "I'm a teacher"),
-          ),
-        ),
+      h('p', { class: 'muted' }, signup ? 'Create a student account.' : 'Write and run code in your browser, together with your class.'),
       signup && h('label', {}, 'Your name', h('input', { name: 'displayName', required: true, maxlength: 60, autocomplete: 'name' })),
       h('label', {}, 'Email', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'email' })),
       h(
@@ -79,9 +70,11 @@ function authView() {
       h(
         'p',
         { class: 'muted switch' },
-        signup ? 'Already have an account? ' : 'New here? ',
+        signup ? 'Already have an account? ' : 'New student? ',
         h('a', { href: '#', onclick: (ev) => (ev.preventDefault(), (mode = signup ? 'login' : 'signup'), draw()) }, signup ? 'Sign in' : 'Create an account'),
       ),
+      h('p', { class: 'muted small' }, "Teachers: your school's admin creates your account and emails you a link to set your password."),
+      signup && demoMode && h('p', { class: 'muted small' }, 'Demo mode: the first account created becomes the admin.'),
     );
     container.replaceChildren(form);
   };
@@ -99,6 +92,8 @@ function page(...content) {
       'header',
       { class: 'top' },
       h('a', { class: 'brand', href: '#' }, 'ClassCode'),
+      me.role === 'admin' && h('a', { class: 'navlink', href: '#' }, 'My classes'),
+      me.role === 'admin' && h('a', { class: 'navlink', href: '#/admin' }, 'Manage teachers'),
       h('span', { class: 'spacer' }),
       h('span', { class: 'muted' }, `${me.displayName} · ${me.role}`),
       h(
@@ -189,7 +184,7 @@ function teacherHome() {
               'a',
               { class: 'card link', href: `#/class/${c.id}` },
               h('h3', {}, c.name),
-              h('p', { class: 'muted' }, `${c.studentCount} student${c.studentCount === 1 ? '' : 's'}`),
+              h('p', { class: 'muted' }, `${c.studentCount} student${c.studentCount === 1 ? '' : 's'}`, c.mine === false ? ` · ${c.teacherName}` : ''),
               h('p', {}, 'Join code ', h('code', { class: 'code' }, c.joinCode)),
             ),
           )
@@ -242,7 +237,7 @@ function teacherClass(classId) {
           h(
             'td',
             { class: 'actions' },
-            h('a', { class: 'btn primary small', href: workspaceUrl(s.workspaceId) }, on ? 'Watch live' : 'View files'),
+            h('a', { class: 'btn primary small', href: workspaceUrl(s.workspaceId) }, on ? 'Join live' : 'Open workspace'),
             h(
               'button',
               {
@@ -320,6 +315,118 @@ function teacherClass(classId) {
   );
 }
 
+// ----------------------------------------------------------------- admin --
+
+function adminView() {
+  const err = errorBox();
+  const notice = h('div', { class: 'card notice', hidden: true });
+  const body = h('tbody');
+  const name = h('input', { name: 'displayName', placeholder: 'Name', required: true, maxlength: 60, autocomplete: 'off' });
+  const email = h('input', { name: 'email', type: 'email', placeholder: 'Email', required: true, autocomplete: 'off' });
+  const role = h('select', { name: 'role' }, h('option', { value: 'teacher' }, 'Teacher'), h('option', { value: 'admin' }, 'Admin'));
+
+  const tell = (text, link) => {
+    notice.replaceChildren(
+      h('span', {}, text),
+      link && h('div', { class: 'small' }, 'Demo mode sends no email. Open this link to set the password: ', h('a', { href: link, target: '_blank', rel: 'noopener' }, 'set password')),
+    );
+    notice.hidden = false;
+  };
+
+  const act = (fn) => async (ev) => {
+    const button = ev.currentTarget;
+    err.hidden = true;
+    button.disabled = true;
+    try {
+      await fn();
+      await load();
+    } catch (e) {
+      showError(err, e);
+    }
+    button.disabled = false;
+  };
+
+  const load = async () => {
+    const staff = await backend.listStaff();
+    body.replaceChildren(
+      ...staff.map((s) =>
+        h(
+          'tr',
+          {},
+          h('td', {}, h('strong', {}, s.displayName), h('div', { class: 'muted small' }, s.email)),
+          h('td', {}, s.role === 'admin' ? 'Admin' : 'Teacher'),
+          h('td', {}, h('span', { class: s.status === 'active' ? 'pill on' : 'pill wait' }, s.status === 'active' ? 'Active' : 'Invite sent')),
+          h(
+            'td',
+            { class: 'actions' },
+            s.id !== me.id &&
+              h(
+                'button',
+                {
+                  class: 'btn small',
+                  onclick: act(async () => {
+                    const r = await backend.resendInvite(s.id);
+                    tell(r.sent === 'reset' ? `Password reset email sent to ${s.email}.` : `Invite sent again to ${s.email}.`, r.demoLink);
+                  }),
+                },
+                s.status === 'active' ? 'Send password reset' : 'Resend invite',
+              ),
+            s.id !== me.id &&
+              h(
+                'button',
+                {
+                  class: 'btn small danger',
+                  onclick: act(async () => {
+                    if (!confirm(`Remove ${s.displayName}'s account? Their classes, and every student's work in those classes, will be deleted.`)) return;
+                    await backend.removeStaff(s.id);
+                    tell(`${s.displayName}'s account was removed.`);
+                  }),
+                },
+                'Remove',
+              ),
+          ),
+        ),
+      ),
+    );
+  };
+
+  const form = h(
+    'form',
+    {
+      class: 'row join',
+      onsubmit: async (ev) => {
+        ev.preventDefault();
+        err.hidden = true;
+        const button = form.querySelector('button[type=submit]');
+        button.disabled = true;
+        try {
+          const r = await backend.inviteStaff({ email: email.value, displayName: name.value, role: role.value });
+          tell(`Invite sent to ${email.value.trim()}. They set their own password from the link in the email.`, r?.demoLink);
+          form.reset();
+          await load();
+        } catch (e) {
+          showError(err, e);
+        }
+        button.disabled = false;
+      },
+    },
+    name,
+    email,
+    role,
+    h('button', { class: 'btn primary', type: 'submit' }, 'Send invite'),
+  );
+
+  load().catch((e) => showError(err, e));
+  return page(
+    h('h2', {}, 'Teacher accounts'),
+    h('p', { class: 'muted' }, 'Teachers cannot sign up on the website. Add them here: they get an email with a link to set their own password.'),
+    form,
+    err,
+    notice,
+    h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Role'), h('th', {}, 'Status'), h('th', {}, ''))), body),
+  );
+}
+
 // ---------------------------------------------------------------- router --
 
 function render() {
@@ -328,6 +435,7 @@ function render() {
   let view;
   if (!me) view = authView();
   else if (me.role === 'student') view = studentHome();
+  else if (me.role === 'admin' && location.hash === '#/admin') view = adminView();
   else {
     const m = /^#\/class\/([\w-]+)$/.exec(location.hash);
     view = m ? teacherClass(m[1]) : teacherHome();

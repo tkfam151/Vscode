@@ -44,7 +44,6 @@ async function main() {
   document.title = `${info.studentName} · ${info.className}`;
   $('who').textContent = `${info.className} · ${info.studentName}`;
   $('teacherBadge').hidden = !isTeacher;
-  if (isTeacher) for (const id of ['newFile', 'renameFile', 'deleteFile', 'run']) $(id).hidden = true;
   $('followWrap').hidden = !isTeacher;
 
   // ---------------------------------------------------------------- files --
@@ -68,7 +67,6 @@ async function main() {
     automaticLayout: true,
     minimap: { enabled: false },
     fontSize: 14,
-    readOnly: isTeacher,
     scrollBeyondLastLine: false,
   });
   dark.addEventListener('change', () => monaco.editor.setTheme(dark.matches ? 'vs-dark' : 'vs'));
@@ -127,7 +125,27 @@ async function main() {
   const saveTimers = new Map();
   const sendTimers = new Map();
   let pendingSaves = 0;
-  const showSaved = () => ($('saved').textContent = isTeacher ? '' : pendingSaves ? 'Saving…' : 'Saved');
+  const showSaved = () => ($('saved').textContent = pendingSaves ? 'Saving…' : 'Saved');
+
+  // Apply someone else's version of a file while keeping this person's cursor:
+  // replace only the changed middle part instead of the whole text.
+  function applyRemote(model, content) {
+    const old = model.getValue();
+    let start = 0;
+    while (start < old.length && start < content.length && old[start] === content[start]) start++;
+    let endOld = old.length;
+    let endNew = content.length;
+    while (endOld > start && endNew > start && old[endOld - 1] === content[endNew - 1]) endOld--, endNew--;
+    const from = model.getPositionAt(start);
+    const to = model.getPositionAt(endOld);
+    applyingRemote = true;
+    model.pushEditOperations(
+      [],
+      [{ range: new monaco.Range(from.lineNumber, from.column, to.lineNumber, to.column), text: content.slice(start, endNew) }],
+      () => null,
+    );
+    applyingRemote = false;
+  }
   const later = (timers, key, ms, fn) => {
     clearTimeout(timers.get(key));
     timers.set(key, setTimeout(() => (timers.delete(key), fn()), ms));
@@ -140,13 +158,12 @@ async function main() {
       models.delete(path);
       if (active === path) openFile(vfs.paths()[0] || null);
     } else if (model && source !== 'editor' && model.getValue() !== content) {
-      applyingRemote = true;
-      model.setValue(content);
-      applyingRemote = false;
+      applyRemote(model, content);
     }
     renderFiles();
     if (!$('preview').hidden) later(sendTimers, '\0preview', 400, () => showPreview(previewPath));
-    if (isTeacher || source === 'remote') return;
+    // Changes that came from the other person are already saved and shared by them.
+    if (source === 'remote') return;
 
     later(sendTimers, path, 200, () =>
       content === null ? channel.send('unlink', { path }) : channel.send('file', { path, content: vfs.get(path) ?? '' }),
@@ -237,6 +254,50 @@ async function main() {
     console.error(e);
   }
 
+  // Run the open file in `session` (or show it, for web pages).
+  const runActive = (session) => {
+    if (!active || !session) return;
+    if (/\.py$/i.test(active)) session.runCommand(`python ${quote(active)}`);
+    else if (/\.(js|mjs)$/i.test(active)) session.runCommand(`node ${quote(active)}`);
+    else if (/\.(html?|css)$/i.test(active)) showPreview(/\.html?$/i.test(active) ? active : undefined);
+    else session.print(`\r\nDon't know how to run ${active}. Run .py, .js or .html files.\r\n`);
+  };
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => $('run').click());
+
+  const badName = (path) =>
+    !path || path.length > 200 || /[\x00-\x1f\\]/.test(path) || path.split('/').some((x) => !x || x === '.' || x === '..');
+  $('newFile').onclick = () => {
+    const name = prompt('New file name (for example game.py, app.js or index.html):');
+    if (!name) return;
+    const path = name.trim().replace(/^\/+/, '');
+    if (badName(path)) return alert('That file name is not allowed.');
+    if (!vfs.has(path)) vfs.set(path, '');
+    openFile(path);
+    editor.focus();
+  };
+  $('renameFile').onclick = () => {
+    if (!active) return;
+    const path = prompt('Rename file to:', active)?.trim().replace(/^\/+/, '');
+    if (!path || path === active) return;
+    if (vfs.has(path)) return alert('A file with that name already exists.');
+    if (badName(path)) return alert('That file name is not allowed.');
+    const old = active;
+    vfs.set(path, vfs.get(old));
+    openFile(path);
+    vfs.delete(old);
+  };
+  $('deleteFile').onclick = () => {
+    if (active && confirm(`Delete ${active}?`)) vfs.delete(active);
+  };
+
+  // Edits arriving from the other person (student <-> teacher).
+  channel.on('file', ({ path, content }) => {
+    if (typeof path !== 'string' || badName(path)) return;
+    vfs.set(path, String(content ?? ''), 'remote');
+    if (!active) openFile(path, { announce: false });
+  });
+  channel.on('unlink', ({ path }) => vfs.delete(String(path), 'remote'));
+
   if (isTeacher) teacherMode();
   else studentMode();
   openFile(vfs.has('main.py') ? 'main.py' : vfs.paths()[0] || null, { announce: false });
@@ -267,7 +328,13 @@ async function main() {
 
     const session = new Session({ write, vfs, onPreview: showPreview });
     term.onData((d) => session.input(d));
-    const snapshot = () => channel.send('snapshot', { term: scrollback, active });
+    // The snapshot already holds everything written so far, so drop output still waiting to be sent.
+    const snapshot = () => {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+      outBuf = '';
+      channel.send('snapshot', { term: scrollback, active });
+    };
 
     channel.on('hello', snapshot);
     channel.on('in', ({ d }) => {
@@ -278,43 +345,23 @@ async function main() {
     classChannel.track({ workspaceId: wsId });
 
     $('run').onclick = () => {
-      if (!active) return;
-      if (/\.py$/i.test(active)) session.runCommand(`python ${quote(active)}`);
-      else if (/\.(js|mjs)$/i.test(active)) session.runCommand(`node ${quote(active)}`);
-      else if (/\.(html?|css)$/i.test(active)) showPreview(/\.html?$/i.test(active) ? active : undefined);
-      else session.print(`\r\nDon't know how to run ${active}. Run .py, .js or .html files.\r\n`);
+      runActive(session);
       term.focus();
     };
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => $('run').click());
-
-    $('newFile').onclick = () => {
-      const name = prompt('New file name (for example game.py, app.js or index.html):');
-      if (!name) return;
-      const path = name.trim().replace(/^\/+/, '');
-      if (!path || path.length > 200 || /[\x00-\x1f\\]/.test(path) || path.split('/').some((s) => !s || s === '.' || s === '..')) {
-        return alert('That file name is not allowed.');
-      }
-      if (!vfs.has(path)) vfs.set(path, '');
-      openFile(path);
-      editor.focus();
-    };
-    $('renameFile').onclick = () => {
-      if (!active) return;
-      const name = prompt('Rename file to:', active);
-      const path = name?.trim().replace(/^\/+/, '');
-      if (!path || path === active) return;
-      if (vfs.has(path)) return alert('A file with that name already exists.');
-      if (path.length > 200 || /[\x00-\x1f\\]/.test(path) || path.split('/').some((s) => !s || s === '.' || s === '..')) {
-        return alert('That file name is not allowed.');
-      }
-      const old = active;
-      vfs.set(path, vfs.get(old));
-      openFile(path);
-      vfs.delete(old);
-    };
-    $('deleteFile').onclick = () => {
-      if (active && confirm(`Delete ${active}?`)) vfs.delete(active);
-    };
+    // The teacher pressed Run: run it here, where the student's terminal lives.
+    channel.on('run', ({ path }) => {
+      if (closed || typeof path !== 'string' || !vfs.has(path)) return;
+      touch();
+      const keep = active;
+      active = path;
+      runActive(session);
+      active = keep;
+    });
+    channel.on('file', ({ path, content }) => {
+      if (typeof path !== 'string' || badName(path)) return;
+      touch();
+      vfs.set(path, String(content ?? ''), 'remote');
+    });
 
     function close() {
       if (closed) return;
@@ -351,26 +398,51 @@ async function main() {
   }
 
   // -------------------------------------------------------------- teacher --
+  // Teachers and admins. When the student has the workspace open, the
+  // terminal is the student's (live, both can type). When the student is not
+  // there, the terminal runs in the teacher's own browser so they can still
+  // run the code. Either way the teacher can edit files.
   function teacherMode() {
     const live = $('live');
     live.hidden = false;
     let online = false;
+    let local = null; // the teacher's own terminal session while the student is away
+    let localTimer = null;
+
     const setOnline = (on) => {
       online = on;
       live.className = on ? 'pill on' : 'pill';
-      live.textContent = on ? 'Live' : 'Workspace closed';
-      $('termnote').textContent = on ? 'You are typing in the student’s terminal' : 'The student does not have this workspace open';
+      live.textContent = on ? 'Live' : 'Student not here';
+      $('termnote').textContent = on
+        ? 'You are in the student\u2019s terminal'
+        : 'The student does not have this workspace open. This terminal runs in your browser.';
     };
+    const startLocal = () => {
+      clearTimeout(localTimer);
+      if (local || online) return;
+      term.reset();
+      local = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview });
+      local.start();
+    };
+    const stopLocal = () => {
+      clearTimeout(localTimer);
+      local?.dispose();
+      local = null;
+    };
+
     setOnline(false);
-    term.write('\x1b[2mWaiting for the student to open their workspace...\x1b[0m\r\n');
+    $('termnote').textContent = 'Connecting to the student\u2019s workspace...';
+    term.write('\x1b[2mLooking for the student...\x1b[0m\r\n');
+    localTimer = setTimeout(startLocal, 3000); // no answer: the student is not here
 
     const follow = (path) => {
-      if ($('follow').checked && path && vfs.has(path)) openFile(path);
+      if ($('follow').checked && path && vfs.has(path)) openFile(path, { announce: false });
     };
     let studentActive = null;
     $('follow').onchange = () => follow(studentActive);
 
     channel.on('snapshot', async ({ term: text, active: path }) => {
+      stopLocal();
       setOnline(true);
       term.reset();
       term.write(String(text || ''));
@@ -383,17 +455,12 @@ async function main() {
       } catch {}
       studentActive = path;
       follow(path);
-      if (!active) openFile(vfs.paths()[0] || null);
+      if (!active) openFile(vfs.paths()[0] || null, { announce: false });
     });
     channel.on('out', ({ d }) => {
-      if (!online) setOnline(true);
-      term.write(String(d));
+      if (online) term.write(String(d));
+      else channel.send('hello', {}); // the student is back: ask for the full picture
     });
-    channel.on('file', ({ path, content }) => {
-      vfs.set(path, String(content), 'remote');
-      if (!active) openFile(path);
-    });
-    channel.on('unlink', ({ path }) => vfs.delete(path, 'remote'));
     channel.on('active', ({ path }) => {
       studentActive = path;
       follow(path);
@@ -402,6 +469,7 @@ async function main() {
       if (!online) return;
       setOnline(false);
       term.write('\r\n\x1b[2m[the student closed the workspace]\x1b[0m\r\n');
+      localTimer = setTimeout(startLocal, 1500);
     };
     channel.on('bye', wentAway);
     // Closing the tab does not always get a goodbye out; presence catches that.
@@ -411,7 +479,13 @@ async function main() {
 
     term.onData((d) => {
       if (online) channel.send('in', { d });
+      else local?.input(d);
     });
+    $('run').onclick = () => {
+      if (online) channel.send('run', { path: active });
+      else runActive(local);
+      term.focus();
+    };
     channel.send('hello', {});
   }
 }

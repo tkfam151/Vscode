@@ -20,16 +20,22 @@ const publicUser = (u) => ({ id: u.id, displayName: u.displayName, role: u.role 
 export function create() {
   let me = null;
 
+  const isStaff = (u) => u && (u.role === 'teacher' || u.role === 'admin');
   const need = (role) => {
     if (!me) throw new Error('Please sign in');
-    if (role && me.role !== role) throw new Error('Not allowed');
+    const ok = !role || (role === 'teacher' ? isStaff(me) : me.role === role);
+    if (!ok) throw new Error('Not allowed');
+  };
+  const inviteLink = (u) => {
+    u.inviteToken = uid();
+    return new URL('set-password.html', location.href).href.split(/[?#]/)[0] + '?invite=' + u.inviteToken;
   };
 
   const access = (db, wsId) => {
     const e = db.enrollments.find((x) => x.id === wsId);
     const c = e && db.classes.find((x) => x.id === e.classId);
     if (!e || !c || !me) return null;
-    const role = e.studentId === me.id ? 'student' : c.teacherId === me.id ? 'teacher' : null;
+    const role = e.studentId === me.id ? 'student' : c.teacherId === me.id || me.role === 'admin' ? 'teacher' : null;
     return role ? { e, c, role } : null;
   };
 
@@ -41,10 +47,13 @@ export function create() {
       return me;
     },
 
-    async signUp({ email, password, displayName, role }) {
+    // Sign-ups are students. Demo only: the first account becomes the admin,
+    // standing in for the SQL step in the real setup.
+    async signUp({ email, password, displayName }) {
       const db = load();
       email = email.trim().toLowerCase();
       if (db.users.some((u) => u.email === email)) throw new Error('That email already has an account');
+      const role = db.users.some((u) => u.role === 'admin') ? 'student' : 'admin';
       const u = { id: uid(), email, password, displayName: displayName.trim() || email, role };
       db.users.push(u);
       save(db);
@@ -53,8 +62,9 @@ export function create() {
     },
 
     async signIn({ email, password }) {
-      const u = load().users.find((x) => x.email === email.trim().toLowerCase() && x.password === password);
-      if (!u) throw new Error('Wrong email or password');
+      const u = load().users.find((x) => x.email === email.trim().toLowerCase());
+      if (u?.pending) throw new Error('Set your password first, using the link from your invite');
+      if (!u || u.password !== password) throw new Error('Wrong email or password');
       sessionStorage.setItem(SESSION_KEY, u.id);
       return (me = publicUser(u));
     },
@@ -64,13 +74,87 @@ export function create() {
       me = null;
     },
 
+    // ---- admin: teacher accounts. No email in demo mode: the page shows the link instead. ----
+    async listStaff() {
+      need('admin');
+      return load()
+        .users.filter(isStaff)
+        .map((u) => ({ id: u.id, displayName: u.displayName, role: u.role, email: u.email, status: u.pending ? 'invited' : 'active' }))
+        .sort((a, b) => a.role.localeCompare(b.role) || a.displayName.localeCompare(b.displayName));
+    },
+
+    async inviteStaff({ email, displayName, role }) {
+      need('admin');
+      const db = load();
+      email = email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email address');
+      if (!displayName.trim()) throw new Error("Enter the teacher's name");
+      if (db.users.some((u) => u.email === email)) throw new Error('That email already has an account');
+      const u = { id: uid(), email, password: null, pending: true, displayName: displayName.trim().slice(0, 60), role: role === 'admin' ? 'admin' : 'teacher' };
+      const demoLink = inviteLink(u);
+      db.users.push(u);
+      save(db);
+      return { id: u.id, demoLink };
+    },
+
+    async resendInvite(id) {
+      need('admin');
+      const db = load();
+      const u = db.users.find((x) => x.id === id && isStaff(x));
+      if (!u) throw new Error('Teacher account not found');
+      const demoLink = inviteLink(u);
+      save(db);
+      return { sent: u.pending ? 'invite' : 'reset', demoLink };
+    },
+
+    async removeStaff(id) {
+      need('admin');
+      if (id === me.id) throw new Error("You can't remove your own account");
+      const db = load();
+      if (!db.users.some((x) => x.id === id && isStaff(x))) throw new Error('Teacher account not found');
+      const classIds = new Set(db.classes.filter((c) => c.teacherId === id).map((c) => c.id));
+      for (const e of db.enrollments.filter((x) => classIds.has(x.classId))) delete db.files[e.id];
+      db.enrollments = db.enrollments.filter((e) => !classIds.has(e.classId));
+      db.classes = db.classes.filter((c) => !classIds.has(c.id));
+      db.users = db.users.filter((u) => u.id !== id);
+      save(db);
+    },
+
+    // ---- set-password page ----
+    async invitedUser() {
+      const token = new URLSearchParams(location.search).get('invite');
+      const u = token && load().users.find((x) => x.inviteToken === token);
+      return u ? { email: u.email, displayName: u.displayName } : null;
+    },
+
+    async setPassword(password) {
+      const token = new URLSearchParams(location.search).get('invite');
+      const db = load();
+      const u = token && db.users.find((x) => x.inviteToken === token);
+      if (!u) throw new Error('This link has expired');
+      u.password = password;
+      u.pending = false;
+      delete u.inviteToken;
+      save(db);
+      sessionStorage.setItem(SESSION_KEY, u.id);
+      me = publicUser(u);
+    },
+
     async listClasses() {
       need();
       const db = load();
-      if (me.role === 'teacher') {
+      if (isStaff(me)) {
         return db.classes
-          .filter((c) => c.teacherId === me.id)
-          .map((c) => ({ id: c.id, name: c.name, joinCode: c.joinCode, studentCount: db.enrollments.filter((e) => e.classId === c.id).length }));
+          .filter((c) => c.teacherId === me.id || me.role === 'admin')
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            joinCode: c.joinCode,
+            studentCount: db.enrollments.filter((e) => e.classId === c.id).length,
+            teacherName: db.users.find((u) => u.id === c.teacherId)?.displayName || '',
+            mine: c.teacherId === me.id,
+          }))
+          .sort((a, b) => Number(b.mine) - Number(a.mine));
       }
       return db.enrollments
         .filter((e) => e.studentId === me.id)
@@ -97,7 +181,7 @@ export function create() {
     async deleteClass(id) {
       need('teacher');
       const db = load();
-      if (!db.classes.some((c) => c.id === id && c.teacherId === me.id)) throw new Error('Class not found');
+      if (!db.classes.some((c) => c.id === id && (c.teacherId === me.id || me.role === 'admin'))) throw new Error('Class not found');
       for (const e of db.enrollments.filter((x) => x.classId === id)) delete db.files[e.id];
       db.enrollments = db.enrollments.filter((e) => e.classId !== id);
       db.classes = db.classes.filter((c) => c.id !== id);
@@ -107,7 +191,7 @@ export function create() {
     async getRoster(classId) {
       need('teacher');
       const db = load();
-      const c = db.classes.find((x) => x.id === classId && x.teacherId === me.id);
+      const c = db.classes.find((x) => x.id === classId && (x.teacherId === me.id || me.role === 'admin'));
       if (!c) throw new Error('Class not found');
       const students = db.enrollments
         .filter((e) => e.classId === classId)
@@ -159,14 +243,14 @@ export function create() {
 
     async saveFile(workspaceId, path, content) {
       const db = load();
-      if (access(db, workspaceId)?.role !== 'student') throw new Error('Not allowed');
+      if (!access(db, workspaceId)) throw new Error('Not allowed');
       (db.files[workspaceId] ||= {})[path] = content;
       save(db);
     },
 
     async deleteFile(workspaceId, path) {
       const db = load();
-      if (access(db, workspaceId)?.role !== 'student') throw new Error('Not allowed');
+      if (!access(db, workspaceId)) throw new Error('Not allowed');
       if (db.files[workspaceId]) delete db.files[workspaceId][path];
       save(db);
     },

@@ -1,14 +1,23 @@
 -- ClassCode database setup for Supabase.
 -- Paste this whole file into the Supabase SQL Editor and press Run. Safe to run more than once.
+--
+-- After your own account exists (sign up on the site like a student), make it
+-- the first admin by running this once, with your email:
+--
+--   update public.profiles set role = 'admin'
+--   where id = (select id from auth.users where email = 'you@yourschool.org');
 
 -- ---------------------------------------------------------------- tables --
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   display_name text not null check (char_length(display_name) between 1 and 60),
-  role text not null check (role in ('teacher', 'student')),
+  role text not null check (role in ('admin', 'teacher', 'student')),
   created_at timestamptz not null default now()
 );
+-- Projects set up with an earlier version of this file only allowed teacher/student.
+alter table public.profiles drop constraint if exists profiles_role_check;
+alter table public.profiles add constraint profiles_role_check check (role in ('admin', 'teacher', 'student'));
 
 create table if not exists public.classes (
   id uuid primary key default gen_random_uuid(),
@@ -45,16 +54,18 @@ alter table public.files enable row level security;
 -- look things up without tripping over the row rules below. Each one checks
 -- auth.uid() (the signed-in user) itself.
 
--- Create the profile row when someone signs up.
+-- Create the profile row when an account is created. Every new account starts
+-- as a student: people who sign up on the website can only be students.
+-- Teacher and admin accounts are created by an admin through the admin-users
+-- Edge Function (supabase/functions/admin-users), which upgrades the role
+-- right after sending the invite email.
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = '' as $$
 declare
-  v_role text := new.raw_user_meta_data ->> 'role';
   v_name text := left(btrim(coalesce(new.raw_user_meta_data ->> 'display_name', '')), 60);
 begin
-  if v_role is null or v_role not in ('teacher', 'student') then v_role := 'student'; end if;
   if v_name = '' then v_name := left(split_part(coalesce(new.email, 'user'), '@', 1), 60); end if;
-  insert into public.profiles (id, display_name, role) values (new.id, v_name, v_role)
+  insert into public.profiles (id, display_name, role) values (new.id, v_name, 'student')
   on conflict (id) do nothing;
   return new;
 end $$;
@@ -63,17 +74,31 @@ drop trigger if exists classcode_on_auth_user_created on auth.users;
 create trigger classcode_on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_user();
 
-create or replace function public.is_class_teacher(p_class uuid) returns boolean
+-- Teachers and admins can run classes.
+create or replace function public.is_staff() returns boolean
 language sql stable security definer set search_path = '' as $$
-  select exists (select 1 from public.classes c where c.id = p_class and c.teacher_id = (select auth.uid()));
+  select exists (select 1 from public.profiles p where p.id = (select auth.uid()) and p.role in ('teacher', 'admin'));
 $$;
 
--- 'student' if the workspace is the caller's own, 'teacher' if it is in one of their classes, else null.
+create or replace function public.is_admin() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.profiles p where p.id = (select auth.uid()) and p.role = 'admin');
+$$;
+
+-- The class's teacher, or any admin (admins can open every class).
+create or replace function public.is_class_teacher(p_class uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.classes c where c.id = p_class and c.teacher_id = (select auth.uid()))
+      or public.is_admin();
+$$;
+
+-- 'student' if the workspace is the caller's own, 'teacher' if it is in one of
+-- their classes (or the caller is an admin), else null.
 create or replace function public.workspace_role(p_ws uuid) returns text
 language sql stable security definer set search_path = '' as $$
   select case
            when e.student_id = (select auth.uid()) then 'student'
-           when c.teacher_id = (select auth.uid()) then 'teacher'
+           when c.teacher_id = (select auth.uid()) or public.is_admin() then 'teacher'
          end
   from public.enrollments e join public.classes c on c.id = e.class_id
   where e.id = p_ws;
@@ -107,11 +132,11 @@ create policy "own profile" on public.profiles for select to authenticated
 
 drop policy if exists "teacher reads own classes" on public.classes;
 create policy "teacher reads own classes" on public.classes for select to authenticated
-  using (teacher_id = (select auth.uid()));
+  using (public.is_class_teacher(id));
 
 drop policy if exists "teacher deletes own classes" on public.classes;
 create policy "teacher deletes own classes" on public.classes for delete to authenticated
-  using (teacher_id = (select auth.uid()));
+  using (public.is_class_teacher(id));
 
 drop policy if exists "read own or class enrollments" on public.enrollments;
 create policy "read own or class enrollments" on public.enrollments for select to authenticated
@@ -121,23 +146,23 @@ drop policy if exists "teacher removes students" on public.enrollments;
 create policy "teacher removes students" on public.enrollments for delete to authenticated
   using (public.is_class_teacher(class_id));
 
--- Files: the student reads and writes; the class teacher can read.
+-- Files: the student, the class teacher and admins can read and change them.
 drop policy if exists "read workspace files" on public.files;
 create policy "read workspace files" on public.files for select to authenticated
   using (public.workspace_role(workspace_id) is not null);
 
 drop policy if exists "student adds files" on public.files;
 create policy "student adds files" on public.files for insert to authenticated
-  with check (public.workspace_role(workspace_id) = 'student');
+  with check (public.workspace_role(workspace_id) is not null);
 
 drop policy if exists "student edits files" on public.files;
 create policy "student edits files" on public.files for update to authenticated
-  using (public.workspace_role(workspace_id) = 'student')
-  with check (public.workspace_role(workspace_id) = 'student');
+  using (public.workspace_role(workspace_id) is not null)
+  with check (public.workspace_role(workspace_id) is not null);
 
 drop policy if exists "student deletes files" on public.files;
 create policy "student deletes files" on public.files for delete to authenticated
-  using (public.workspace_role(workspace_id) = 'student');
+  using (public.workspace_role(workspace_id) is not null);
 
 -- Keep one workspace from filling the database.
 create or replace function public.limit_workspace_files() returns trigger
@@ -172,7 +197,7 @@ declare
   v_id uuid;
   v_name text := btrim(coalesce(p_name, ''));
 begin
-  if not exists (select 1 from public.profiles p where p.id = (select auth.uid()) and p.role = 'teacher') then
+  if not public.is_staff() then
     raise exception 'Only teachers can create classes';
   end if;
   if char_length(v_name) not between 1 and 80 then
@@ -216,14 +241,16 @@ end $$;
 
 create or replace function public.my_classes() returns json
 language sql stable security definer set search_path = '' as $$
-  select case (select p.role from public.profiles p where p.id = (select auth.uid()))
-    when 'teacher' then (
+  select case
+    when public.is_staff() then (
       select coalesce(json_agg(json_build_object(
                'id', c.id, 'name', c.name, 'joinCode', c.join_code,
-               'studentCount', (select count(*) from public.enrollments e where e.class_id = c.id))
-             order by c.created_at desc), '[]'::json)
-      from public.classes c where c.teacher_id = (select auth.uid()))
-    when 'student' then (
+               'studentCount', (select count(*) from public.enrollments e where e.class_id = c.id),
+               'teacherName', t.display_name, 'mine', c.teacher_id = (select auth.uid()))
+             order by (c.teacher_id = (select auth.uid())) desc, c.created_at desc), '[]'::json)
+      from public.classes c join public.profiles t on t.id = c.teacher_id
+      where c.teacher_id = (select auth.uid()) or public.is_admin())
+    else (
       select coalesce(json_agg(json_build_object(
                'id', c.id, 'name', c.name, 'teacherName', t.display_name, 'workspaceId', e.id)
              order by e.created_at desc), '[]'::json)
@@ -231,7 +258,6 @@ language sql stable security definer set search_path = '' as $$
       join public.classes c on c.id = e.class_id
       join public.profiles t on t.id = c.teacher_id
       where e.student_id = (select auth.uid()))
-    else '[]'::json
   end;
 $$;
 
@@ -246,7 +272,7 @@ language sql stable security definer set search_path = '' as $$
       from public.enrollments e join public.profiles s on s.id = e.student_id
       where e.class_id = c.id))
   from public.classes c
-  where c.id = p_class and c.teacher_id = (select auth.uid());
+  where c.id = p_class and public.is_class_teacher(c.id);
 $$;
 
 create or replace function public.workspace_info(p_ws uuid) returns json
@@ -260,6 +286,23 @@ language sql stable security definer set search_path = '' as $$
   join public.profiles s on s.id = e.student_id
   where e.id = p_ws and public.workspace_role(e.id) is not null;
 $$;
+
+-- Teacher and admin accounts, for the admin's "Manage teachers" page.
+-- status is 'invited' until the person has set their password from the email.
+create or replace function public.admin_list_staff() returns json
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can see this';
+  end if;
+  return (
+    select coalesce(json_agg(json_build_object(
+             'id', p.id, 'displayName', p.display_name, 'role', p.role, 'email', u.email,
+             'status', case when coalesce(u.encrypted_password, '') = '' then 'invited' else 'active' end)
+           order by p.role, lower(p.display_name)), '[]'::json)
+    from public.profiles p join auth.users u on u.id = p.id
+    where p.role in ('teacher', 'admin'));
+end $$;
 
 -- ---------------------------------------------------------------- grants --
 
@@ -275,6 +318,12 @@ revoke all on function public.join_class(text) from public, anon;
 revoke all on function public.my_classes() from public, anon;
 revoke all on function public.class_roster(uuid) from public, anon;
 revoke all on function public.workspace_info(uuid) from public, anon;
+revoke all on function public.admin_list_staff() from public, anon;
+revoke all on function public.is_staff() from public, anon;
+revoke all on function public.is_admin() from public, anon;
+grant execute on function public.admin_list_staff() to authenticated;
+grant execute on function public.is_staff() to authenticated;
+grant execute on function public.is_admin() to authenticated;
 grant execute on function public.create_class(text) to authenticated;
 grant execute on function public.join_class(text) to authenticated;
 grant execute on function public.my_classes() to authenticated;

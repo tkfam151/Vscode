@@ -18,6 +18,22 @@ export function create(url, anonKey) {
     return msg;
   };
 
+  const setPasswordUrl = () => new URL('set-password.html', location.href).href.split(/[?#]/)[0];
+
+  const adminCall = async (body) => {
+    const { data, error } = await sb.functions.invoke('admin-users', { body });
+    if (!error) return data;
+    let message = error.message;
+    try {
+      message = (await error.context.json()).error || message;
+    } catch {
+      if (error.name === 'FunctionsFetchError' || error.context?.status === 404) {
+        message = 'Could not reach the admin-users function. Has it been deployed to Supabase? (see README)';
+      }
+    }
+    throw new Error(message);
+  };
+
   const profile = async (authUser) => {
     if (!authUser) return null;
     const row = ok(await sb.from('profiles').select('id, display_name, role').eq('id', authUser.id).maybeSingle());
@@ -30,10 +46,9 @@ export function create(url, anonKey) {
       return profile(data.session?.user);
     },
 
-    async signUp({ email, password, displayName, role }) {
-      const data = ok(
-        await sb.auth.signUp({ email: email.trim(), password, options: { data: { display_name: displayName.trim(), role } } }),
-      );
+    // Website sign-ups are always student accounts (enforced in schema.sql).
+    async signUp({ email, password, displayName }) {
+      const data = ok(await sb.auth.signUp({ email: email.trim(), password, options: { data: { display_name: displayName.trim() } } }));
       if (!data.session) throw new Error('Account created. Check your email to confirm it, then sign in.');
       return profile(data.user);
     },
@@ -45,6 +60,36 @@ export function create(url, anonKey) {
 
     async signOut() {
       await sb.auth.signOut();
+    },
+
+    // ---- admin: teacher accounts (supabase/functions/admin-users) ----
+    async listStaff() {
+      return ok(await sb.rpc('admin_list_staff')) || [];
+    },
+
+    async inviteStaff({ email, displayName, role }) {
+      return adminCall({ action: 'invite', email, displayName, role, redirectTo: setPasswordUrl() });
+    },
+
+    async resendInvite(id) {
+      return adminCall({ action: 'resend', id, redirectTo: setPasswordUrl() });
+    },
+
+    async removeStaff(id) {
+      return adminCall({ action: 'remove', id });
+    },
+
+    // ---- set-password page, opened from an invite or reset email ----
+    async invitedUser() {
+      const { data } = await sb.auth.getSession();
+      const user = data.session?.user;
+      if (!user) return null;
+      const p = await profile(user);
+      return { email: user.email, displayName: p?.displayName || user.email };
+    },
+
+    async setPassword(password) {
+      ok(await sb.auth.updateUser({ password }));
     },
 
     async listClasses() {

@@ -1,11 +1,17 @@
 // Picks the data layer: Supabase when configured, otherwise the in-browser demo.
 //
 // Both implementations expose the same async API:
-//   init() -> user | null                user = { id, displayName, role }
-//   signUp({ email, password, displayName, role }) -> user
+//   init() -> user | null                user = { id, displayName, role: 'admin' | 'teacher' | 'student' }
+//   signUp({ email, password, displayName }) -> user   (always a student)
 //   signIn({ email, password }) -> user
 //   signOut()
-//   listClasses()        teacher: [{ id, name, joinCode, studentCount }]
+//   listStaff() -> [{ id, displayName, email, role, status: 'invited' | 'active' }]   admin only
+//   inviteStaff({ email, displayName, role }) -> { demoLink? }                      admin only, emails an invite
+//   resendInvite(id) -> { sent: 'invite' | 'reset', demoLink? }                     admin only
+//   removeStaff(id)                                                                 admin only
+//   invitedUser() -> { email, displayName } | null      on set-password.html, from the email link
+//   setPassword(password)                               on set-password.html; signs the user in
+//   listClasses()        teacher/admin: [{ id, name, joinCode, studentCount }]
 //                        student: [{ id, name, teacherName, workspaceId }]
 //   createClass(name) -> { id }
 //   deleteClass(id)
