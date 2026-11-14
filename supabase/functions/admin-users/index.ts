@@ -34,14 +34,24 @@ function friendly(message: string) {
   return message;
 }
 
+// Projects on Supabase's newer API keys may provide secret keys as JSON instead.
+function newSecretKey() {
+  try {
+    const keys = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}');
+    return keys.default ?? Object.values(keys)[0];
+  } catch {
+    return undefined;
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return json(405, { error: 'Use POST' });
 
   try {
     const url = Deno.env.get('SUPABASE_URL');
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-    if (!url || !serviceKey) fail(500, 'The function is missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || newSecretKey();
+    if (!url || !serviceKey) fail(500, 'The function is missing SUPABASE_URL or a secret (service-role) key');
     const admin = createClient(url, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     });

@@ -67,7 +67,7 @@ Creating teacher accounts and sending invites needs Supabase's secret service-ro
 - **In the Supabase dashboard:** **Edge Functions → Deploy a new function → Via Editor**, name it exactly `admin-users`, replace the example code with the contents of [`supabase/functions/admin-users/index.ts`](supabase/functions/admin-users/index.ts), and deploy.
 - **Or with the Supabase CLI:** `supabase functions deploy admin-users --project-ref <your-project-ref>` from this repository.
 
-The function reads the project URL and service-role key that Supabase provides to every function; there is nothing else to configure.
+The function reads the project URL and secret key that Supabase provides to every function; there is nothing else to configure. It checks for itself that the caller is an admin, so in the function's **Details** you can turn **Verify JWT with legacy secret** off. Do that if the admin page reports "Invalid JWT" or "Unauthorized" (projects using the newer `sb_publishable_…` keys need it off).
 
 ### 5. Make yourself the first admin
 
