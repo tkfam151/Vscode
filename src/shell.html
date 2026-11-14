@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #1e1e1e; color: #e6e6e6; font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  #bar { flex: none; height: 34px; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: #252a3a; border-bottom: 1px solid #111; white-space: nowrap; overflow: hidden; }
+  #bar b { font-weight: 600; }
+  #who { overflow: hidden; text-overflow: ellipsis; }
+  .badge { background: #c2410c; color: #fff; border-radius: 3px; padding: 1px 6px; font-size: 11px; font-weight: 600; }
+  .spacer { flex: 1; }
+  #idle { color: #9aa4bf; }
+  #idle.warn { color: #fbbf24; font-weight: 600; }
+  #bar a { color: #9ecbff; text-decoration: none; }
+  #bar a:hover { text-decoration: underline; }
+  iframe { flex: 1; width: 100%; border: 0; }
+  #closed { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(10, 12, 20, .92); text-align: center; padding: 24px; }
+  #closed.show { display: flex; }
+  #closed h1 { font-size: 22px; margin: 0 0 8px; }
+  #closed p { color: #b8c0d6; font-size: 15px; margin: 0 0 20px; }
+  #closed a { display: inline-block; background: #3b82f6; color: #fff; padding: 10px 18px; border-radius: 6px; font-size: 15px; text-decoration: none; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>ClassCode</b>
+  <span id="who"></span>
+  <span id="teacher" class="badge" hidden>Teacher view</span>
+  <span class="spacer"></span>
+  <span id="idle"></span>
+  <a id="dash" href="#">Dashboard</a>
+</div>
+<iframe id="frame" title="VS Code" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
+<div id="closed">
+  <div>
+    <h1>This workspace has closed</h1>
+    <p id="closedMsg"></p>
+    <a id="reopen" href="#">Reopen workspace</a>
+  </div>
+</div>
+<script>
+  const INFO = "__INFO__";
+  const $ = (id) => document.getElementById(id);
+  document.title = INFO.studentName + ' · ' + INFO.className;
+  $('who').textContent = INFO.className + ' · ' + INFO.studentName;
+  $('teacher').hidden = !INFO.isTeacher;
+  $('dash').href = INFO.dashboardUrl;
+  $('reopen').href = INFO.dashboardUrl + '/open.html?ws=' + INFO.workspaceId;
+  $('closedMsg').textContent =
+    'Workspaces close after ' + INFO.idleMinutes + ' minutes without activity. Your files are saved — reopen it to keep working.';
+
+  // "Activity" means real input (keys, mouse, touch) in this tab, not merely leaving it open.
+  let active = true;
+  const mark = () => { active = true; };
+  const watch = (win) => {
+    try {
+      for (const ev of ['keydown', 'pointerdown', 'pointermove', 'wheel', 'touchstart'])
+        win.addEventListener(ev, mark, { capture: true, passive: true });
+    } catch {}
+  };
+  const frame = $('frame');
+  watch(window);
+  frame.addEventListener('load', () => watch(frame.contentWindow));
+  frame.src = INFO.frameSrc;
+
+  let failures = 0;
+  let closed = false;
+  function showClosed() {
+    closed = true;
+    frame.src = 'about:blank';
+    $('closed').classList.add('show');
+    $('idle').textContent = '';
+  }
+  async function ping() {
+    if (closed) return;
+    const wasActive = active;
+    active = false;
+    try {
+      const r = await fetch('/__classroom/ping?active=' + (wasActive ? 1 : 0), { method: 'POST', cache: 'no-store' });
+      if (!r.ok) return showClosed();
+      failures = 0;
+      const { remainingMs } = await r.json();
+      const mins = Math.ceil(remainingMs / 60000);
+      const el = $('idle');
+      if (remainingMs < 5 * 60000) {
+        el.className = 'warn';
+        el.textContent = 'Closing in ' + mins + ' min — press a key or move the mouse to stay';
+      } else {
+        el.className = '';
+        el.textContent = 'Closes after ' + INFO.idleMinutes + ' min idle';
+      }
+    } catch {
+      if (wasActive) active = true;
+      if (++failures >= 2) showClosed(); // the port stops answering once the workspace is shut down
+    }
+  }
+  ping();
+  setInterval(ping, 20000);
+</script>
+</body>
+</html>

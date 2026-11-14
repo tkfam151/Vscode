@@ -1,0 +1,14 @@
+{
+  "name": "classcode",
+  "version": "1.0.0",
+  "description": "Classroom platform that gives every student their own browser-based VS Code workspace",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  }
+}
