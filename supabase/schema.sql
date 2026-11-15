@@ -39,7 +39,7 @@ create table if not exists public.enrollments (
 create table if not exists public.files (
   workspace_id uuid not null references public.enrollments (id) on delete cascade,
   path text not null check (char_length(path) between 1 and 200),
-  content text not null default '' check (octet_length(content) <= 262144),
+  content text not null default '' check (octet_length(content) <= 3500000),
   updated_at timestamptz not null default now(),
   primary key (workspace_id, path)
 );
@@ -49,10 +49,17 @@ create table if not exists public.files (
 create table if not exists public.class_files (
   class_id uuid not null references public.classes (id) on delete cascade,
   path text not null check (char_length(path) between 1 and 200),
-  content text not null default '' check (octet_length(content) <= 262144),
+  content text not null default '' check (octet_length(content) <= 3500000),
   updated_at timestamptz not null default now(),
   primary key (class_id, path)
 );
+
+-- Pictures are stored as text (data URLs), so files may be up to about 3.5 MB.
+-- Projects set up with an earlier version of this file had a 256 KB limit.
+alter table public.files drop constraint if exists files_content_check;
+alter table public.files add constraint files_content_check check (octet_length(content) <= 3500000);
+alter table public.class_files drop constraint if exists class_files_content_check;
+alter table public.class_files add constraint class_files_content_check check (octet_length(content) <= 3500000);
 
 alter table public.profiles enable row level security;
 alter table public.class_files enable row level security;

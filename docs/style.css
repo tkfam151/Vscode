@@ -125,9 +125,10 @@ body.ide { height: 100vh; display: flex; flex-direction: column; overflow: hidde
 .badge { background: #c2410c; color: #fff; border-radius: 4px; padding: 1px 7px; font-size: 12px; font-weight: 600; }
 .idle.warn { color: #b45309; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
 #main { flex: 1; min-height: 0; display: flex; }
-#side { flex: none; width: 190px; display: flex; flex-direction: column; background: var(--card); border-right: 1px solid var(--line); }
+#side { flex: none; width: 200px; display: flex; flex-direction: column; background: var(--card); border-right: 1px solid var(--line); }
 .side-head { flex: none; display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 6px 0 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1px solid var(--line); }
-.icon { font: inherit; font-size: 14px; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 3px 6px; border-radius: 4px; }
+.icon { font: inherit; font-size: 14px; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 3px 4px; border-radius: 4px; }
+.side-actions { display: flex; flex-wrap: nowrap; }
 .icon:hover { background: var(--pill-bg); color: var(--text); }
 #files { list-style: none; margin: 0; padding: 4px 0; overflow: auto; flex: 1; }
 #files li { padding: 4px 12px; cursor: pointer; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -143,6 +144,12 @@ body.ide { height: 100vh; display: flex; flex-direction: column; overflow: hidde
 #tabbar, #termhead { flex: none; display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 12px; font-size: 13px; font-weight: 600; background: var(--card); border-bottom: 1px solid var(--line); }
 #termhead { border-top: 1px solid var(--line); }
 #editor { flex: 3; min-height: 0; }
+#imageView { flex: 3; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px;
+  background: repeating-conic-gradient(var(--pill-bg) 0% 25%, transparent 0% 50%) 50% / 20px 20px; }
+#imageView[hidden] { display: none; }
+#imageImg { max-width: 100%; max-height: calc(100% - 40px); object-fit: contain; box-shadow: 0 1px 6px rgba(0, 0, 0, .15); }
+#imageInfo { margin: 0; background: var(--card); padding: 3px 10px; border-radius: 4px; text-align: center; }
+#side.dropping { outline: 2px dashed var(--primary); outline-offset: -4px; }
 #terminal { flex: 2; min-height: 0; background: #11141c; padding: 6px 0 0 8px; overflow: hidden; }
 #preview { flex: none; width: 38%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--card); }
 #previewFrame { flex: 1; width: 100%; border: 0; background: #fff; }

@@ -10,7 +10,7 @@ const HELP = `Commands
   node FILE.js|.ts    run JavaScript/TypeScript   pip install X   install a Python package
   lua FILE.lua        run Lua                     sqlite [FILE.sql]  run SQL (SQLite)
   bash FILE.sh        run a script of these commands, one per line
-  preview FILE        show a web page (.html) or Markdown (.md) in the preview pane
+  preview FILE        show a web page (.html), Markdown (.md) or picture in the preview pane
   run FILE|FOLDER     run anything; a folder runs its main file (main.py, index.html, ...)
   ls [DIR]   cat FILE   cd DIR   pwd   mkdir DIR   touch FILE
   rm [-r] PATH   mv FROM TO   cp FROM TO   echo TEXT [> FILE]   clear   help
@@ -25,7 +25,7 @@ const LANGUAGES = [
   { re: /\.lua$/i, cmd: 'lua' },
   { re: /\.sql$/i, cmd: 'sqlite' },
   { re: /\.(sh|bash)$/i, cmd: 'bash' },
-  { re: /\.(html?|md|markdown|css)$/i, cmd: 'preview' },
+  { re: /\.(html?|md|markdown|css|png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i, cmd: 'preview' },
 ];
 // Languages the editor colours but this browser version cannot run.
 const EDIT_ONLY = {
@@ -277,6 +277,10 @@ export class Session {
           for (const a of args) {
             if (!vfs.has(at(a))) throw new Error(`cat: ${a}: No such file`);
             const text = vfs.get(at(a));
+            if (text.startsWith('data:')) {
+              say(`[${a} is a picture, ${Math.round((text.length * 0.75) / 1024)} KB. Open it from the file list, or preview it.]\n`);
+              continue;
+            }
             say(text.endsWith('\n') || !text ? text : text + '\n');
           }
           break;

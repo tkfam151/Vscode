@@ -21,6 +21,7 @@
 import { backend, demoMode } from './backend.js';
 import { IDLE_MINUTES } from '../config.js';
 import { VFS, entryFor } from './vfs.js';
+import { isImage, isDataUrl, imageUrl, readUpload, sizeLabel } from './media.js';
 import { Session, commandFor } from './shell.js';
 import { applyBrand } from './brand.js';
 
@@ -33,6 +34,7 @@ const wsId = starterClass ? null : params.get('ws');
 const IDLE_MS = IDLE_MINUTES * 60_000;
 const SCROLLBACK_BYTES = 60_000;
 const STARTER = 'print("Hello from ClassCode!")\n';
+const BIG_FILE = 200_000; // characters; bigger files are not sent over the live channel
 
 function overlay(title, msg, button, action) {
   $('overlayTitle').textContent = title;
@@ -135,11 +137,24 @@ async function main() {
     select(path, false);
     // make sure the file is visible in the tree
     for (let i = path ? path.indexOf('/') : -1; i > 0; i = path.indexOf('/', i + 1)) collapsed.delete(path.slice(0, i));
-    editor.setModel(path ? modelFor(path) : null);
+    const picture = path && isDataUrl(vfs.get(path));
+    editor.setModel(path && !picture ? modelFor(path) : null);
+    $('editor').hidden = !!picture;
+    $('imageView').hidden = !picture;
+    if (picture) showImage(path);
     $('filename').textContent = path || 'No file open';
     renderFiles();
     if (announce && !isTeacher) channel.send('active', { path });
     if (!$('preview').hidden && path && /\.(html?|md|markdown)$/i.test(path)) showPreview(path);
+  }
+
+  // Uploaded pictures open in a viewer instead of the code editor.
+  function showImage(path) {
+    const content = vfs.get(path);
+    $('imageImg').src = content;
+    $('imageImg').alt = path;
+    $('imageImg').onload = () =>
+      ($('imageInfo').textContent = `${path} · ${$('imageImg').naturalWidth} × ${$('imageImg').naturalHeight} px · ${sizeLabel(content.length)}. Use it in a web page with <img src="${path.split('/').pop()}">.`);
   }
 
   function renderFiles() {
@@ -227,14 +242,21 @@ async function main() {
     } else if (model && source !== 'editor' && model.getValue() !== content) {
       applyRemote(model, content);
     }
+    if (content !== null && path === active && (isDataUrl(content) !== $('editor').hidden)) openFile(path, { announce: false });
+    else if (content !== null && path === active && isDataUrl(content)) showImage(path);
     renderFiles();
     if (!$('preview').hidden) later(sendTimers, '\0preview', 400, () => showPreview(previewPath));
     // Changes that came from the other person are already saved and shared by them.
     if (source === 'remote') return;
 
-    later(sendTimers, path, 200, () =>
-      content === null ? channel.send('unlink', { path }) : channel.send('file', { path, content: vfs.get(path) ?? '' }),
-    );
+    // Live messages have a size limit, so big files (pictures) are announced
+    // once saved, and the other side loads them from storage.
+    const big = content !== null && content.length > BIG_FILE;
+    if (!big) {
+      later(sendTimers, path, 200, () =>
+        content === null ? channel.send('unlink', { path }) : channel.send('file', { path, content: vfs.get(path) ?? '' }),
+      );
+    }
     if (!saveTimers.has(path)) pendingSaves++;
     showSaved();
     later(saveTimers, path, 700, async () => {
@@ -242,6 +264,7 @@ async function main() {
         const exists = path.endsWith('/') ? vfs.dirs.has(path.slice(0, -1)) : vfs.has(path);
         if (exists) await store.save(path, vfs.get(path) ?? '');
         else await store.remove(path);
+        if (exists && (vfs.get(path) ?? '').length > BIG_FILE) channel.send('refetch', { path });
       } catch (e) {
         $('saved').textContent = `Not saved: ${e.message}`;
         pendingSaves--;
@@ -266,9 +289,16 @@ async function main() {
     }
     previewPath = path;
     $('previewName').textContent = `Preview · ${path}`;
+    if (isImage(path)) {
+      const url = imageUrl(path, vfs.get(path));
+      $('previewFrame').srcdoc = `<!doctype html><body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#eef1f6"><img src="${url}" style="max-width:100%;max-height:100vh">`;
+      return;
+    }
     if (/\.(md|markdown)$/i.test(path)) {
       // Markdown: formatted in the same sandboxed frame (no access to this site).
-      const html = marked.parse(vfs.get(path));
+      const mdDoc = new DOMParser().parseFromString(marked.parse(vfs.get(path)), 'text/html');
+      inlineImages(mdDoc, path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '');
+      const html = mdDoc.body.innerHTML;
       $('previewFrame').srcdoc =
         '<!doctype html><meta charset="utf-8"><style>body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:24px auto;padding:0 20px;color:#1c2333}' +
         'pre{background:#f4f6fb;padding:12px;border-radius:6px;overflow:auto}code{font:14px ui-monospace,Menlo,Consolas,monospace;background:#f4f6fb;padding:1px 4px;border-radius:4px}' +
@@ -288,6 +318,8 @@ async function main() {
       const css = local(link.getAttribute('href'));
       if (css !== null) {
         const style = doc.createElement('style');
+        const cssPath = resolve(link.getAttribute('href'), dir) || '';
+        style.dataset.ccDir = cssPath.includes('/') ? cssPath.slice(0, cssPath.lastIndexOf('/') + 1) : '';
         style.textContent = css;
         link.replaceWith(style);
       }
@@ -299,7 +331,92 @@ async function main() {
         script.textContent = js;
       }
     }
+    inlineImages(doc, dir);
     $('previewFrame').srcdoc = '<!doctype html>' + doc.documentElement.outerHTML;
+  }
+
+  // ---- images inside the preview ----
+  // The preview is a sealed frame that can't reach workspace files by URL, so
+  // pictures are put straight into the page: <img src>, CSS url(...), and images
+  // a script loads (new Image(), img.src = 'player.png') all find them.
+  const resolve = (ref, baseDir) => {
+    if (!ref || /^([a-z][a-z0-9+.-]*:|\/\/|#)/i.test(ref)) return null;
+    const parts = (ref.startsWith('/') ? ref.slice(1) : baseDir + ref).split(/[?#]/)[0].split('/');
+    const out = [];
+    for (const seg of parts) {
+      if (seg === '..') out.pop();
+      else if (seg && seg !== '.') out.push(seg);
+    }
+    try {
+      return decodeURIComponent(out.join('/'));
+    } catch {
+      return out.join('/');
+    }
+  };
+  const imageFor = (ref, baseDir) => {
+    const p = resolve(ref, baseDir);
+    return p && vfs.has(p) ? imageUrl(p, vfs.get(p)) : null;
+  };
+  const rewriteCss = (css, baseDir) =>
+    css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (m, q, ref) => {
+      const url = imageFor(ref.trim(), baseDir);
+      return url ? `url("${url}")` : m;
+    });
+
+  function inlineImages(doc, dir) {
+    for (const el of doc.querySelectorAll('img[src], source[src], input[type=image][src], video[poster], link[rel~=icon][href]')) {
+      const attr = el.hasAttribute('poster') ? 'poster' : el.tagName === 'LINK' ? 'href' : 'src';
+      const url = imageFor(el.getAttribute(attr), dir);
+      if (url) el.setAttribute(attr, url);
+    }
+    for (const el of doc.querySelectorAll('[srcset]')) {
+      el.setAttribute(
+        'srcset',
+        el
+          .getAttribute('srcset')
+          .split(',')
+          .map((part) => {
+            const [ref, ...rest] = part.trim().split(/\s+/);
+            return [imageFor(ref, dir) || ref, ...rest].join(' ');
+          })
+          .join(', '),
+      );
+    }
+    for (const el of doc.querySelectorAll('[background]')) {
+      const url = imageFor(el.getAttribute('background'), dir);
+      if (url) el.setAttribute('background', url);
+    }
+    for (const style of doc.querySelectorAll('style')) style.textContent = rewriteCss(style.textContent, style.dataset.ccDir ?? dir);
+    for (const el of doc.querySelectorAll('[style]')) el.setAttribute('style', rewriteCss(el.getAttribute('style'), dir));
+    // Images a script loads by name: give the page a table of workspace pictures.
+    const pictures = {};
+    let total = 0;
+    for (const p of vfs.paths()) {
+      if (!isImage(p) || total > 8_000_000) continue;
+      const url = imageUrl(p, vfs.get(p));
+      if (!url) continue;
+      pictures[p] = url;
+      total += url.length;
+    }
+    if (Object.keys(pictures).length && doc.querySelector('script')) {
+      const patch = doc.createElement('script');
+      patch.textContent = `(() => {
+  const PICS = ${JSON.stringify(pictures).replace(/</g, '\\u003c')}, DIR = ${JSON.stringify(dir)};
+  const find = (v) => {
+    if (typeof v !== 'string' || /^([a-z][a-z0-9+.-]*:|\\/\\/)/i.test(v)) return v;
+    const out = [];
+    for (const s of (v.startsWith('/') ? v.slice(1) : DIR + v).split(/[?#]/)[0].split('/')) s === '..' ? out.pop() : s && s !== '.' && out.push(s);
+    return PICS[out.join('/')] || v;
+  };
+  for (const C of [HTMLImageElement, HTMLSourceElement]) {
+    const d = Object.getOwnPropertyDescriptor(C.prototype, 'src');
+    Object.defineProperty(C.prototype, 'src', { get() { return d.get.call(this); }, set(v) { d.set.call(this, find(v)); }, configurable: true });
+  }
+  const setAttr = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (n, v) { return setAttr.call(this, n, /^(src|href|poster)$/i.test(n) ? find(v) : v); };
+})();`;
+      doc.head.prepend(patch);
+    }
   }
   $('previewBtn').onclick = () => ($('preview').hidden ? showPreview() : (($('preview').hidden = true), fit()));
   $('previewClose').onclick = () => (($('preview').hidden = true), fit());
@@ -432,6 +549,50 @@ async function main() {
     } else if (active && confirm(`Delete ${active}?`)) vfs.delete(active);
   };
 
+  // Upload images and files: button, or drag them onto the file list.
+  async function addUploads(fileList) {
+    const base = baseDir();
+    const problems = [];
+    let last = null;
+    for (const file of fileList) {
+      const path = (base ? base + '/' : '') + file.name.replace(/[\\/]/g, '_');
+      if (badName(path)) {
+        problems.push(`${file.name}: that name is not allowed`);
+        continue;
+      }
+      if (vfs.isDir(path) && !vfs.has(path)) {
+        problems.push(`${file.name}: a folder has that name`);
+        continue;
+      }
+      if (vfs.has(path) && !confirm(`${path} already exists. Replace it?`)) continue;
+      try {
+        const { content } = await readUpload(file);
+        vfs.set(path, content);
+        if (!last || (isImage(path) && !isImage(last))) last = path; // show the first picture
+      } catch (e) {
+        problems.push(e.message);
+      }
+    }
+    if (last) openFile(last);
+    if (problems.length) alert(problems.join('\n'));
+  }
+  $('upload').onclick = () => $('uploadInput').click();
+  $('uploadInput').onchange = async () => {
+    await addUploads([...$('uploadInput').files]);
+    $('uploadInput').value = '';
+  };
+  $('side').addEventListener('dragover', (ev) => {
+    if (![...ev.dataTransfer.types].includes('Files')) return;
+    ev.preventDefault();
+    $('side').classList.add('dropping');
+  });
+  $('side').addEventListener('dragleave', () => $('side').classList.remove('dropping'));
+  $('side').addEventListener('drop', (ev) => {
+    ev.preventDefault();
+    $('side').classList.remove('dropping');
+    if (ev.dataTransfer.files.length) addUploads([...ev.dataTransfer.files]);
+  });
+
   // Edits arriving from the other person (student <-> teacher).
   channel.on('file', ({ path, content }) => {
     if (typeof path !== 'string' || badName(path)) return;
@@ -439,6 +600,13 @@ async function main() {
     if (!active) openFile(path, { announce: false });
   });
   channel.on('unlink', ({ path }) => vfs.delete(String(path), 'remote'));
+  channel.on('refetch', async ({ path }) => {
+    if (typeof path !== 'string' || badName(path)) return;
+    try {
+      const f = (await store.list()).find((x) => x.path === path);
+      if (f) vfs.set(path, f.content, 'remote');
+    } catch {}
+  });
 
   if (isStarter) starterMode();
   else if (isTeacher) teacherMode();

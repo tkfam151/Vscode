@@ -26,16 +26,19 @@
       <span class="side-actions">
         <button id="newFile" class="icon" title="New file">＋</button>
         <button id="newFolder" class="icon" title="New folder">📁</button>
+        <button id="upload" class="icon" title="Upload images or files (or drag them here)">⬆</button>
         <button id="renameFile" class="icon" title="Rename the selected file or folder">✎</button>
         <button id="deleteFile" class="icon" title="Delete the selected file or folder">🗑</button>
       </span>
     </div>
     <ul id="files"></ul>
+    <input id="uploadInput" type="file" multiple hidden>
     <label id="followWrap" class="follow" hidden><input type="checkbox" id="follow" checked> Follow student</label>
   </aside>
   <section id="work">
     <div id="tabbar"><span id="filename"></span><span id="saved" class="muted small"></span></div>
     <div id="editor"></div>
+    <div id="imageView" hidden><img id="imageImg" alt=""><p id="imageInfo" class="muted small"></p></div>
     <div id="termhead"><span>Terminal</span><span id="termnote" class="muted small"></span></div>
     <div id="terminal"></div>
   </section>

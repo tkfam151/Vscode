@@ -119,13 +119,33 @@ function rmTree(FS, dir) {
   }
 }
 
+// Pictures are stored as data URLs; Python sees the real image bytes.
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|ico|avif)$/i;
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' };
+const MAX_IMAGE = 2_200_000; // bytes
+
+function fromDataUrl(content) {
+  const m = /^data:[^;,]*;base64,/.exec(content);
+  if (!m) return null;
+  const bin = atob(content.slice(m[0].length));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function toDataUrl(path, bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return `data:${MIME[path.split('.').pop().toLowerCase()] || 'application/octet-stream'};base64,${btoa(bin)}`;
+}
+
 function writeProject(py, files, dirs = []) {
   rmTree(py.FS, ROOT);
   for (const dir of dirs) py.FS.mkdirTree(`${ROOT}/${dir}`);
   for (const [path, content] of files) {
     const full = `${ROOT}/${path}`;
     py.FS.mkdirTree(full.slice(0, full.lastIndexOf('/')));
-    py.FS.writeFile(full, content);
+    py.FS.writeFile(full, fromDataUrl(content) ?? content);
   }
 }
 
@@ -144,6 +164,14 @@ function diffProject(py, files) {
       if (py.FS.isDir(st.mode)) walk(p, r);
       else {
         seen.add(r);
+        // pictures a program saves (for example a matplotlib chart) are kept too
+        if (IMAGE_RE.test(r)) {
+          if (st.size > MAX_IMAGE) continue;
+          const url = toDataUrl(r, py.FS.readFile(p));
+          const old = before.get(r);
+          if (!old || old.slice(old.indexOf(',')) !== url.slice(url.indexOf(','))) changed.push([r, url]);
+          continue;
+        }
         if (st.size > MAX_FILE) continue;
         try {
           const text = strict.decode(py.FS.readFile(p));

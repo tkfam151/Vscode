@@ -18,6 +18,7 @@ Students can write any language (the editor colours 80+ languages, including Jav
 | **JavaScript** | **Run**, `node app.js` |
 | **TypeScript** | **Run**, `node app.ts` (compiled by the editor's built-in TypeScript) |
 | **HTML / CSS / JS web pages** | **Run** or `preview` shows the page in the preview pane |
+| **Pictures (JPG, PNG, GIF, WebP, SVG...)** | Upload with the ⬆ button or drag them onto the file list. Click one to view it. Web pages can use them with `<img src="cat.jpg">`, CSS `url(...)`, or from JavaScript (`img.src = 'player.png'`), and Markdown with `![](cat.jpg)`. Python reads and writes them as real image files. Photos bigger than 1600 px are scaled down on upload; pictures can be up to about 2 MB. |
 | **Markdown** | **Run** or `preview notes.md` shows it formatted |
 | **SQL (SQLite)** | **Run** on a `.sql` file prints result tables; `sqlite` opens an interactive `sqlite>` prompt. Each run starts with an empty database. |
 | **Lua** | **Run**, `lua game.lua` (Lua 5.3; `io.read` input isn't supported) |
@@ -37,7 +38,7 @@ export const SCHOOL_LOGO = 'logo.png';   // a file in the docs folder
 export const APP_NAME = 'ClassCode';
 ```
 
-Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
+To add it on GitHub: open the repository, go into the `docs` folder, choose **Add file → Upload files**, drop in the logo, name it `logo.png`, and commit to the branch your Pages site uses. Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
 
 ## What this is not
 
