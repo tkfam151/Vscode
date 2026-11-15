@@ -50,7 +50,9 @@ const NEEDS_COMPUTER = {
   java: 'Java', javac: 'Java', gcc: 'a C compiler', 'g++': 'a C++ compiler', clang: 'a C compiler', make: 'make',
   go: 'Go', cargo: 'Rust', rustc: 'Rust', ruby: 'Ruby', php: 'PHP', dotnet: '.NET', docker: 'Docker', yarn: 'yarn', pnpm: 'pnpm',
   vim: 'vim', nano: 'nano', emacs: 'emacs', top: 'top', ps: 'ps', kill: 'kill', chmod: 'chmod', ping: 'ping',
+  icoa: 'the ICOA CLI',
 };
+const SERVER_HINT = "Your school's ClassCode server version gives every student a real Linux computer where this works.";
 
 /** The command that runs `path` (a file), or an Error explaining why it can't run. */
 export function commandFor(path) {
@@ -439,6 +441,14 @@ export class Session {
       this.print(`zsh: ${e.message}\n`);
       return (this.status = e.status ?? 2);
     }
+    if (/Homebrew\/install|brew\.sh\/install|install\.sh\b.*brew/i.test(line)) {
+      this.print(`Homebrew can't be installed here: this terminal runs inside your web browser, and Homebrew needs a real Mac or Linux computer with sudo and compilers. ${SERVER_HINT}\nFor packages here, use pip install (Python) or npm install (JavaScript).\n`);
+      return (this.status = 1);
+    }
+    if (/\$\(|`/.test(line.replace(/'[^']*'/g, ''))) {
+      this.print('zsh: command substitution ($(...) and backticks) is not supported in this browser terminal.\n');
+      return (this.status = 2);
+    }
     for (const { op, text } of parts) {
       if (this.interrupted || this.disposed) break;
       if (op === '&&' && this.status !== 0) continue;
@@ -540,7 +550,7 @@ export class Session {
       if (fn) return (await fn.call(this, rest, stdin)) ?? 0;
       if (NEEDS_COMPUTER[cmd]) {
         this.print(
-          `zsh: ${cmd}: not available here. This terminal runs inside your web browser, so it can't install or run ${NEEDS_COMPUTER[cmd]}.` +
+          `zsh: ${cmd}: not available here. This terminal runs inside your web browser, so it can't install or run ${NEEDS_COMPUTER[cmd]}. ${SERVER_HINT}` +
             (cmd === 'sudo' || cmd === 'apt' || cmd === 'apt-get' || cmd === 'brew' ? ' Use pip install or npm install for packages.' : '') +
             '\n',
         );
@@ -1365,7 +1375,7 @@ const builtins = {
     return status ? (status === 22 ? 8 : 4) : 0;
   },
   npx(args) {
-    fail(`npx can't download and run tools here. Install a package with "npm install ${args[0] || 'NAME'}" and use it from your own code.`, 127);
+    fail(`npx can't run terminal programs here, because this terminal runs inside your web browser. To use a package's code, install it with "npm install NAME" and import it in your program. ${SERVER_HINT}`, 127);
   },
 
   // ------------------------------------------------------------ other langs --
@@ -1690,6 +1700,9 @@ async function npm(args) {
   }
   if (['install', 'i', 'add', 'isntall', 'in'].includes(sub)) {
     const dev = rest.some((a) => a === '-D' || a === '--save-dev');
+    if (rest.some((a) => a === '-g' || a === '--global')) {
+      this.print(`\x1b[33mnpm warn\x1b[0m -g: there are no global programs in this browser terminal, so the package is added to package.json for your code to use instead.\n`);
+    }
     const specs = rest.filter((a) => !a.startsWith('-'));
     const pj = this.packageJson(true);
     const section = dev ? 'devDependencies' : 'dependencies';
@@ -1705,6 +1718,7 @@ async function npm(args) {
       return 0;
     }
     let added = 0;
+    const cliPackages = [];
     for (const spec of specs) {
       const m = /^(@[^/@]+\/[^@]+|[^@]+)(?:@(.+))?$/.exec(spec);
       if (!m) fail(`ERR! Invalid package name "${spec}"`);
@@ -1713,6 +1727,14 @@ async function npm(args) {
       const version = await resolveNpm(name, range);
       await warmNpm(name, version);
       this.print('\x1b[2K');
+      // a package that is a terminal program (it has "bin" commands) can't run here
+      try {
+        const meta = await fetch(`${NPM_CDN}${name}@${version}/package.json`).then((r) => (r.ok ? r.json() : null));
+        const bins = meta?.bin ? (typeof meta.bin === 'string' ? [name.split('/').pop()] : Object.keys(meta.bin)) : [];
+        if (bins.length) {
+          cliPackages.push(`${name} is a terminal program (${bins.join(', ')}). Programs like that need a real computer, so its command can't run in this browser terminal; your code can still import the parts that work in a browser. ${SERVER_HINT}`);
+        }
+      } catch {}
       if (pj.data.dependencies?.[name] && section !== 'dependencies') delete pj.data.dependencies[name];
       if (pj.data.devDependencies?.[name] && section !== 'devDependencies') delete pj.data.devDependencies[name];
       if (!pj.data[section][name]) added++;
@@ -1721,6 +1743,7 @@ async function npm(args) {
     pj.data[section] = Object.fromEntries(Object.entries(pj.data[section]).sort(([a], [b]) => a.localeCompare(b)));
     pj.save();
     this.print(`\n${added ? `added ${added} package${added === 1 ? '' : 's'}` : 'up to date'}, and audited ${Object.keys({ ...pj.data.dependencies, ...pj.data.devDependencies }).length + 1} packages in ${took()}\n\nfound 0 vulnerabilities\n`);
+    for (const note of cliPackages) this.print(`\x1b[33mnpm warn\x1b[0m ${note}\n`);
     if (!this.npmHintShown) {
       this.npmHintShown = true;
       this.print(`\x1b[2mSaved in /${pj.path}. Packages load from the internet when your program runs, so there is no node_modules folder.\x1b[0m\n`);

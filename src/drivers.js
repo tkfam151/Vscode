@@ -58,6 +58,32 @@ class DockerDriver {
     }
     const stale = await this.docker('ps', '-aq', '--filter', 'label=classcode=1');
     if (stale) await this.docker('rm', '-f', ...stale.split('\n'));
+    await this.ensureImage();
+  }
+
+  // The default image (Node.js 22, npm, Python/pip, git, compilers, Homebrew's
+  // needs) is built from ./workspace-image the first time the server starts.
+  async ensureImage() {
+    const image = this.config.image;
+    try {
+      await this.docker('image', 'inspect', image);
+      return;
+    } catch {}
+    if (!/^classcode-workspace(:|$)/.test(image)) {
+      // someone else's image: let docker pull it on first use
+      return;
+    }
+    const dir = path.resolve(new URL('../workspace-image', import.meta.url).pathname);
+    console.log(`[classcode] building the workspace image "${image}" (first start only; this takes a few minutes)...`);
+    const proxyArgs = [];
+    for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy']) {
+      if (process.env[k]) proxyArgs.push('--build-arg', `${k}=${process.env[k]}`);
+    }
+    await new Promise((resolve, reject) => {
+      const p = spawn('docker', ['build', '-t', image, ...proxyArgs, dir], { stdio: ['ignore', 'inherit', 'inherit'] });
+      p.on('error', reject);
+      p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`building the workspace image failed (docker build exited with ${code}). Fix the error above, or set WORKSPACE_IMAGE=codercom/code-server:latest to use the plain image.`))));
+    });
   }
 
   async start(id) {
@@ -74,6 +100,7 @@ class DockerDriver {
       '--cpus', c.cpus,
       '--pids-limit', String(c.pidsLimit),
       '-v', `${name}:/home/coder`,
+      '-v', `${name}-brew:/home/linuxbrew`, // Homebrew, if the student installs it
       '--entrypoint', 'sh',
       c.image,
       '-c',
@@ -91,7 +118,7 @@ class DockerDriver {
 
   async destroy(id) {
     await this.stop(id);
-    await this.docker('volume', 'rm', '-f', this.name(id)).catch(() => {});
+    await this.docker('volume', 'rm', '-f', this.name(id), `${this.name(id)}-brew`).catch(() => {});
   }
 }
 

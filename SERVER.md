@@ -16,9 +16,10 @@ Each workspace is a [code-server](https://github.com/coder/code-server) instance
 Requirements: Linux server, Node.js 22.13+, Docker. There are no npm dependencies to install.
 
 ```bash
-docker pull codercom/code-server:latest   # once, so the first student doesn't wait for the download
 npm start
 ```
+
+The first start builds the workspace image (`classcode-workspace`, from the `workspace-image` folder); this takes a few minutes and needs internet access. You can also build it ahead of time with `docker build -t classcode-workspace workspace-image`.
 
 Then browse to `http://<server-ip>:8080`.
 
@@ -31,6 +32,24 @@ Open these ports in your firewall:
 
 The user running `npm start` must be allowed to use Docker.
 
+## What students' terminals can do
+
+Each student's workspace is a real Linux computer (a Docker container) with:
+
+- **Node.js 22 and npm**: `npm i icoa-cli`, `npx icoa`, or `npm i -g icoa-cli` and then just `icoa`. Global installs go into the student's home folder, so they need no `sudo` and are still there next time.
+- **Python 3 and pip**: `pip install requests` installs for that student (into `~/.local`) and is kept.
+- **git, curl, compilers** (`build-essential`), `zip`/`unzip`, `nano`.
+- **Homebrew**, if the student wants it, with the official command:
+
+  ```bash
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  ```
+
+  Homebrew is installed into `/home/linuxbrew`, which has its own volume per student, so it's still there when the workspace is reopened. New terminals pick up `brew` automatically. Homebrew downloads several hundred MB, so the first install takes a while.
+- `sudo` without a password, inside the student's own container only.
+
+Students need internet access from the server for npm, pip and Homebrew: `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`, `github.com`, `ghcr.io` and `raw.githubusercontent.com`.
+
 ## How it works
 
 ```
@@ -42,7 +61,7 @@ browser ──► :9000, :9001 …   one authenticated proxy port per running wo
 
 - Opening a workspace starts the student's container, picks a free port, and sends the browser there with a one-time link. Only that student and the class's teacher can get a link.
 - The workspace page tracks real input (keys, mouse, touch). An open-but-untouched tab does not count as activity. After the idle timeout the container is stopped and the port closes; the page shows a "Reopen workspace" button.
-- Files live in a Docker volume per student per class (`classcode-ws-<id>`), mounted at `/home/coder`. Removing a student from a class or deleting the class deletes the volume.
+- Files live in a Docker volume per student per class (`classcode-ws-<id>`), mounted at `/home/coder`, and Homebrew in a second one (`classcode-ws-<id>-brew`) mounted at `/home/linuxbrew`. Removing a student from a class or deleting the class deletes both.
 - Stopping the server (Ctrl+C / SIGTERM) closes all running workspaces.
 
 ## Configuration
@@ -57,8 +76,8 @@ Set these as environment variables.
 | `IDLE_TIMEOUT_MINUTES` | `60` | Close a workspace after this long without activity |
 | `WORKSPACE_PORT_START` | `9000` | First workspace port |
 | `WORKSPACE_PORT_COUNT` | `200` | Number of ports = max workspaces open at once |
-| `WORKSPACE_IMAGE` | `codercom/code-server:latest` | Container image for workspaces |
-| `WORKSPACE_MEMORY` | `1g` | Memory limit per workspace |
+| `WORKSPACE_IMAGE` | `classcode-workspace:latest` | Container image for workspaces (built automatically from `workspace-image/`; set `codercom/code-server:latest` for the plain image without Node.js/Python) |
+| `WORKSPACE_MEMORY` | `2g` | Memory limit per workspace (npm and Homebrew need room) |
 | `WORKSPACE_CPUS` | `1` | CPU limit per workspace |
 | `WORKSPACE_PIDS_LIMIT` | `512` | Process limit per workspace |
 | `TEACHER_SIGNUP_CODE` | (none) | If set, creating a teacher account requires this code |
@@ -69,7 +88,7 @@ Set these as environment variables.
 
 Rough sizing: budget `WORKSPACE_MEMORY` per student who has a workspace open at the same time.
 
-To give students extra tools (Python, Java, …), build an image `FROM codercom/code-server` that installs them and set `WORKSPACE_IMAGE`.
+To give students more tools (Java, Go, …), add them to `workspace-image/Dockerfile` and rebuild with `docker build -t classcode-workspace workspace-image` (running workspaces pick it up the next time they open).
 
 ## Things to know before putting it in front of a class
 

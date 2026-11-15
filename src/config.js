@@ -19,8 +19,9 @@ export const config = {
   startTimeoutMs: int(env.WORKSPACE_START_TIMEOUT_SECONDS, 120) * 1000,
 
   // docker driver
-  image: env.WORKSPACE_IMAGE || 'codercom/code-server:latest',
-  memory: env.WORKSPACE_MEMORY || '1g',
+  // built automatically from ./workspace-image (Node.js 22, npm, Python/pip, git, compilers)
+  image: env.WORKSPACE_IMAGE || 'classcode-workspace:latest',
+  memory: env.WORKSPACE_MEMORY || '2g',
   cpus: env.WORKSPACE_CPUS || '1',
   pidsLimit: int(env.WORKSPACE_PIDS_LIMIT, 512),
   network: env.WORKSPACE_NETWORK || 'classcode-net',
