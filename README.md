@@ -18,6 +18,7 @@ Students can run:
 | **JavaScript** | `node app.js` |
 | **Web pages** | HTML/CSS/JS with a live preview pane |
 | **Shell basics** | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `echo > file`, `clear`, `help` |
+| **Folders** | Make folders with the 📁 button or `mkdir`. Select a folder and press **Run** (or type `python folder`, `node folder`, `preview folder`) to run its main file: `main.py`, `__main__.py`, `app.py`, `index.html`, `main.js` or `index.js`. Python runs inside that folder, so files next to each other can import each other. |
 
 ## What this is not
 

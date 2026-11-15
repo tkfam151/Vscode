@@ -228,7 +228,7 @@ function teacherClass(classId) {
         copyBtn.disabled = true;
         try {
           const r = await backend.copyStarterToStudents(classId);
-          alert(r.files ? `Added ${r.files} file${r.files === 1 ? '' : 's'} for ${r.students} student${r.students === 1 ? '' : 's'}.` : 'Every student already has all the starter files.');
+          alert(r.files ? `Added ${r.files} new file${r.files === 1 ? "" : "s"} or folder${r.files === 1 ? "" : "s"} for ${r.students} student${r.students === 1 ? "" : "s"}.` : 'Every student already has all the starter files.');
         } catch (e) {
           showError(err, e);
         }
@@ -287,8 +287,11 @@ function teacherClass(classId) {
     code.textContent = data.class.joinCode;
     students = data.students;
     const starter = await backend.listStarterFiles(classId);
+    const files = starter.filter((f) => !f.path.endsWith('/')).map((f) => f.path).sort();
+    const folders = starter.length - files.length;
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
     starterInfo.textContent = starter.length
-      ? `${starter.length} file${starter.length === 1 ? '' : 's'}: ${starter.map((f) => f.path).sort().slice(0, 6).join(', ')}${starter.length > 6 ? ', …' : ''}`
+      ? `${plural(files.length, 'file')}${folders ? `, ${plural(folders, 'empty folder')}` : ''}: ${files.slice(0, 6).join(', ')}${files.length > 6 ? ', …' : ''}`
       : 'No starter files yet. New students start with a one-line main.py.';
     copyBtn.disabled = !starter.length || !students.length;
     draw();

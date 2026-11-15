@@ -20,7 +20,7 @@
 
 import { backend, demoMode } from './backend.js';
 import { IDLE_MINUTES } from '../config.js';
-import { VFS } from './vfs.js';
+import { VFS, entryFor } from './vfs.js';
 import { Session } from './shell.js';
 
 const $ = (id) => document.getElementById(id);
@@ -78,7 +78,7 @@ async function main() {
   // ---------------------------------------------------------------- files --
   const vfs = new VFS();
   const stored = await store.list();
-  for (const f of stored) vfs.files.set(f.path, f.content);
+  vfs.load(stored);
   if (info.role === 'student' && !stored.length) {
     vfs.files.set('main.py', STARTER);
     store.save('main.py', STARTER).catch(() => {});
@@ -115,9 +115,23 @@ async function main() {
     return m;
   };
 
+  // What Run, rename and delete act on: the open file, or a folder clicked in the tree.
+  let selected = null; // { path, dir }
+  const collapsed = new Set();
+
+  function select(path, dir) {
+    selected = path === null ? null : { path, dir };
+    const name = path === null ? '' : path.split('/').pop() + (dir ? '/' : '');
+    $('run').textContent = name ? `▶ Run ${name.length > 18 ? name.slice(0, 17) + '…' : name}` : '▶ Run';
+    $('run').title = dir ? `Run the folder ${path}/ (its main file) — Ctrl+Enter` : `Run ${path || 'the open file'} — Ctrl+Enter`;
+  }
+
   function openFile(path, { announce = true } = {}) {
     if (path && !vfs.has(path)) path = null;
     active = path;
+    select(path, false);
+    // make sure the file is visible in the tree
+    for (let i = path ? path.indexOf('/') : -1; i > 0; i = path.indexOf('/', i + 1)) collapsed.delete(path.slice(0, i));
     editor.setModel(path ? modelFor(path) : null);
     $('filename').textContent = path || 'No file open';
     renderFiles();
@@ -126,28 +140,48 @@ async function main() {
   }
 
   function renderFiles() {
-    const ul = $('files');
-    ul.replaceChildren(
-      ...vfs.paths().map((p) => {
+    if (selected?.dir && !vfs.isDir(selected.path)) select(active, false);
+    const rows = [];
+    const walk = (dir, depth) => {
+      for (const e of vfs.list(dir)) {
+        const p = dir ? `${dir}/${e.name}` : e.name;
         const li = document.createElement('li');
-        const depth = p.split('/').length - 1;
-        li.textContent = p.split('/').pop();
         li.title = p;
-        li.style.paddingLeft = 12 + depth * 12 + 'px';
-        if (depth) {
-          const dir = document.createElement('span');
-          dir.className = 'dir';
-          dir.textContent = p.slice(0, p.lastIndexOf('/') + 1);
-          li.prepend(dir);
+        li.style.paddingLeft = 8 + depth * 14 + 'px';
+        const chev = document.createElement('span');
+        chev.className = 'chev';
+        const label = document.createElement('span');
+        label.textContent = e.name;
+        li.append(chev, label);
+        if (e.dir) {
+          const open = !collapsed.has(p);
+          li.className = 'folder' + (selected?.dir && selected.path === p ? ' active' : '');
+          chev.textContent = open ? '▾' : '▸';
+          chev.onclick = (ev) => {
+            ev.stopPropagation();
+            open ? collapsed.add(p) : collapsed.delete(p);
+            renderFiles();
+          };
+          li.onclick = () => {
+            if (selected?.dir && selected.path === p) open ? collapsed.add(p) : collapsed.delete(p);
+            else collapsed.delete(p);
+            select(p, true);
+            renderFiles();
+          };
+          rows.push(li);
+          if (open) walk(p, depth + 1);
+        } else {
+          if (!selected?.dir && p === active) li.className = 'active';
+          li.onclick = () => {
+            if (isTeacher) $('follow').checked = false;
+            openFile(p);
+          };
+          rows.push(li);
         }
-        if (p === active) li.className = 'active';
-        li.onclick = () => {
-          if (isTeacher) $('follow').checked = false;
-          openFile(p);
-        };
-        return li;
-      }),
-    );
+      }
+    };
+    walk('', 0);
+    $('files').replaceChildren(...rows);
   }
 
   // Keep editor models, the file list, storage and the teacher in step with the files.
@@ -181,6 +215,7 @@ async function main() {
   };
 
   vfs.onChange((path, content, source) => {
+    if (path.endsWith('/') && content === null) collapsed.delete(path.slice(0, -1));
     const model = models.get(path);
     if (content === null) {
       model?.dispose();
@@ -201,7 +236,8 @@ async function main() {
     showSaved();
     later(saveTimers, path, 700, async () => {
       try {
-        if (vfs.has(path)) await store.save(path, vfs.get(path));
+        const exists = path.endsWith('/') ? vfs.dirs.has(path.slice(0, -1)) : vfs.has(path);
+        if (exists) await store.save(path, vfs.get(path) ?? '');
         else await store.remove(path);
       } catch (e) {
         $('saved').textContent = `Not saved: ${e.message}`;
@@ -284,40 +320,91 @@ async function main() {
     console.error(e);
   }
 
-  // Run the open file in `session` (or show it, for web pages).
+  // Run a file or folder in `session` (or show it, for web pages). A folder runs
+  // its main file: main.py, __main__.py, app.py, index.html, main.js or index.js.
+  const runPath = (session, path, isDir) => {
+    if (!session || path == null) return;
+    let file = path;
+    if (isDir) {
+      file = entryFor(vfs, path);
+      if (!file) {
+        session.print(`\r\nThe folder ${path}/ has nothing to run. Add a main.py, index.html or main.js to it.\r\n`);
+        return;
+      }
+    }
+    if (/\.py$/i.test(file)) session.runCommand(`python ${quote(file)}`);
+    else if (/\.(js|mjs)$/i.test(file)) session.runCommand(`node ${quote(file)}`);
+    else if (/\.(html?|css)$/i.test(file)) showPreview(/\.html?$/i.test(file) ? file : undefined);
+    else session.print(`\r\nDon't know how to run ${file}. Run .py, .js or .html files, or a folder with a main file.\r\n`);
+  };
+  const runTarget = () => (selected ? { path: selected.path, dir: selected.dir } : { path: active, dir: false });
   const runActive = (session) => {
-    if (!active || !session) return;
-    if (/\.py$/i.test(active)) session.runCommand(`python ${quote(active)}`);
-    else if (/\.(js|mjs)$/i.test(active)) session.runCommand(`node ${quote(active)}`);
-    else if (/\.(html?|css)$/i.test(active)) showPreview(/\.html?$/i.test(active) ? active : undefined);
-    else session.print(`\r\nDon't know how to run ${active}. Run .py, .js or .html files.\r\n`);
+    const t = runTarget();
+    runPath(session, t.path, t.dir);
   };
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => $('run').click());
 
+  // A path from a person or the other side. A trailing "/" (a folder) is allowed.
   const badName = (path) =>
-    !path || path.length > 200 || /[\x00-\x1f\\]/.test(path) || path.split('/').some((x) => !x || x === '.' || x === '..');
+    !path ||
+    path.length > 200 ||
+    /[\x00-\x1f\\]/.test(path) ||
+    path.replace(/\/$/, '').split('/').some((x) => !x || x === '.' || x === '..');
+  const clean = (name) => name.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+  // New things go in the selected folder, or next to the open file.
+  const baseDir = () => (selected?.dir ? selected.path : active?.includes('/') ? active.slice(0, active.lastIndexOf('/')) : '');
+  const taken = (path) => vfs.has(path) || vfs.isDir(path);
+
   $('newFile').onclick = () => {
-    const name = prompt('New file name (for example game.py, app.js or index.html):');
+    const base = baseDir();
+    const name = prompt('New file name (for example game.py, app.js or index.html):', base ? base + '/' : '');
     if (!name) return;
-    const path = name.trim().replace(/^\/+/, '');
-    if (badName(path)) return alert('That file name is not allowed.');
+    const path = clean(name);
+    if (badName(path) || path === base) return alert('That file name is not allowed.');
+    if (vfs.isDir(path)) return alert('A folder with that name already exists.');
     if (!vfs.has(path)) vfs.set(path, '');
     openFile(path);
     editor.focus();
   };
+  $('newFolder').onclick = () => {
+    const base = baseDir();
+    const name = prompt('New folder name:', base ? base + '/' : '');
+    if (!name) return;
+    const path = clean(name);
+    if (badName(path) || path === base) return alert('That folder name is not allowed.');
+    if (taken(path)) return alert('Something with that name already exists.');
+    vfs.mkdir(path);
+    select(path, true);
+    renderFiles();
+  };
   $('renameFile').onclick = () => {
-    if (!active) return;
-    const path = prompt('Rename file to:', active)?.trim().replace(/^\/+/, '');
-    if (!path || path === active) return;
-    if (vfs.has(path)) return alert('A file with that name already exists.');
-    if (badName(path)) return alert('That file name is not allowed.');
-    const old = active;
-    vfs.set(path, vfs.get(old));
-    openFile(path);
-    vfs.delete(old);
+    const target = selected?.dir ? selected : active ? { path: active, dir: false } : null;
+    if (!target) return;
+    const path = clean(prompt(`Rename ${target.dir ? 'folder' : 'file'} to:`, target.path) || '');
+    if (!path || path === target.path) return;
+    if (badName(path)) return alert('That name is not allowed.');
+    if (taken(path)) return alert('Something with that name already exists.');
+    if (target.dir) {
+      if (path.startsWith(target.path + '/')) return alert('A folder cannot be moved into itself.');
+      const reopen = active?.startsWith(target.path + '/') ? path + active.slice(target.path.length) : null;
+      vfs.renameDir(target.path, path);
+      if (reopen) openFile(reopen);
+      select(path, true);
+      renderFiles();
+    } else {
+      vfs.set(path, vfs.get(target.path));
+      openFile(path);
+      vfs.delete(target.path);
+    }
   };
   $('deleteFile').onclick = () => {
-    if (active && confirm(`Delete ${active}?`)) vfs.delete(active);
+    if (selected?.dir) {
+      const n = vfs.paths().filter((p) => p.startsWith(selected.path + '/')).length;
+      if (!confirm(`Delete the folder ${selected.path}/${n ? ` and the ${n} file${n === 1 ? '' : 's'} in it` : ''}?`)) return;
+      vfs.rmdir(selected.path);
+      select(active, false);
+      renderFiles();
+    } else if (active && confirm(`Delete ${active}?`)) vfs.delete(active);
   };
 
   // Edits arriving from the other person (student <-> teacher).
@@ -380,13 +467,10 @@ async function main() {
       term.focus();
     };
     // The teacher pressed Run: run it here, where the student's terminal lives.
-    channel.on('run', ({ path }) => {
-      if (closed || typeof path !== 'string' || !vfs.has(path)) return;
+    channel.on('run', ({ path, dir }) => {
+      if (closed || typeof path !== 'string' || !(dir ? vfs.isDir(path) : vfs.has(path))) return;
       touch();
-      const keep = active;
-      active = path;
-      runActive(session);
-      active = keep;
+      runPath(session, path, !!dir);
     });
     channel.on('file', ({ path, content }) => {
       if (typeof path !== 'string' || badName(path)) return;
@@ -495,6 +579,7 @@ async function main() {
         const seen = new Set(fresh.map((f) => f.path));
         for (const f of fresh) vfs.set(f.path, f.content, 'remote');
         for (const p of vfs.paths()) if (!seen.has(p)) vfs.delete(p, 'remote');
+        for (const d of [...vfs.dirs]) if (!seen.has(d + '/')) vfs.delete(d + '/', 'remote');
       } catch {}
       studentActive = path;
       follow(path);
@@ -525,7 +610,7 @@ async function main() {
       else local?.input(d);
     });
     $('run').onclick = () => {
-      if (online) channel.send('run', { path: active });
+      if (online) channel.send('run', runTarget());
       else runActive(local);
       term.focus();
     };

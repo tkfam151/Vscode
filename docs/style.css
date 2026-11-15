@@ -128,7 +128,11 @@ body.ide { height: 100vh; display: flex; flex-direction: column; overflow: hidde
 #files li { padding: 4px 12px; cursor: pointer; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #files li:hover { background: var(--pill-bg); }
 #files li.active { background: var(--primary); color: var(--primary-text); }
-#files .dir { opacity: .6; }
+#files li { display: flex; align-items: center; gap: 2px; }
+#files li > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+#files .chev { flex: none; width: 16px; text-align: center; color: var(--muted); font-size: 11px; }
+#files li.active .chev { color: inherit; }
+#files li.folder { font-weight: 600; }
 .follow { flex: none; flex-direction: row; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); font-weight: 500; }
 #work { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #tabbar, #termhead { flex: none; display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 12px; font-size: 13px; font-weight: 600; background: var(--card); border-bottom: 1px solid var(--line); }

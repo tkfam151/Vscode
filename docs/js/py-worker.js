@@ -119,8 +119,9 @@ function rmTree(FS, dir) {
   }
 }
 
-function writeProject(py, files) {
+function writeProject(py, files, dirs = []) {
   rmTree(py.FS, ROOT);
+  for (const dir of dirs) py.FS.mkdirTree(`${ROOT}/${dir}`);
   for (const [path, content] of files) {
     const full = `${ROOT}/${path}`;
     py.FS.mkdirTree(full.slice(0, full.lastIndexOf('/')));
@@ -157,7 +158,7 @@ function diffProject(py, files) {
   return { changed, deleted: [...before.keys()].filter((p) => !seen.has(p)) };
 }
 
-async function withProject(files, fn) {
+async function withProject(files, fn, dirs = []) {
   let py;
   try {
     py = await boot();
@@ -167,13 +168,25 @@ async function withProject(files, fn) {
   }
   lines.length = 0;
   eof = false;
-  writeProject(py, files);
+  try {
+    // The last program may have left Python inside a project folder; step out
+    // before clearing the project, or removing that folder fails.
+    py.FS.chdir('/');
+    writeProject(py, files, dirs);
+  } catch (e) {
+    out(`Could not prepare the files: ${e.message || e.name || e}\n`);
+    return postMessage({ type: 'done', changed: [], deleted: [] });
+  }
   try {
     await fn(py);
   } catch (e) {
     out(String(e.message || e) + '\n');
   }
-  postMessage({ type: 'done', ...diffProject(py, files) });
+  let result = { changed: [], deleted: [] };
+  try {
+    result = diffProject(py, files);
+  } catch {}
+  postMessage({ type: 'done', ...result });
 }
 
 self.onmessage = async ({ data }) => {
@@ -201,9 +214,9 @@ self.onmessage = async ({ data }) => {
       py.globals.set('_cc_path', `${ROOT}/${data.entry}`);
       py.globals.set('_cc_argv', py.toPy(data.argv || []));
       await py.runPythonAsync('_cc_run(_cc_path, _cc_argv)');
-    });
+    }, data.dirs);
   } else if (data.type === 'repl') {
-    await withProject(data.files, (py) => py.runPythonAsync('_cc_repl()'));
+    await withProject(data.files, (py) => py.runPythonAsync('_cc_repl()'), data.dirs);
   } else if (data.type === 'pip') {
     await withProject([], async (py) => {
       await py.loadPackage('micropip', { messageCallback: () => {} });

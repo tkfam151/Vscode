@@ -2,10 +2,14 @@
 // runners for Python (Pyodide worker) and JavaScript (plain worker).
 // Everything here runs in the student's own browser tab.
 
+import { entryFor } from './vfs.js';
+
 const HELP = `Commands
   python FILE.py      run a Python program        python        interactive Python
   node FILE.js        run a JavaScript program    pip install X install a Python package
   preview [FILE.html] show a web page in the preview pane
+  python FOLDER / node FOLDER / preview FOLDER   run a folder's main file
+                      (main.py, __main__.py, app.py, index.html, main.js or index.js)
   ls [DIR]   cat FILE   cd DIR   pwd   mkdir DIR   touch FILE
   rm [-r] PATH   mv FROM TO   cp FROM TO   echo TEXT [> FILE]   clear   help
 Keys: Ctrl+C stops a running program, Up/Down recall earlier commands.
@@ -263,7 +267,17 @@ export class Session {
           if (args.length !== 2) throw new Error(`${cmd}: use ${cmd} FROM TO`);
           const from = at(args[0]);
           let to = at(args[1]);
-          if (!vfs.has(from)) throw new Error(`${cmd}: ${args[0]}: No such file`);
+          if (!vfs.has(from)) {
+            if (!(cmd === 'mv' && from && vfs.isDir(from))) throw new Error(`${cmd}: ${args[0]}: No such file`);
+            // moving a folder
+            if (vfs.isDir(to) && !vfs.has(to)) to = (to ? to + '/' : '') + from.split('/').pop();
+            if (to === from) break;
+            if (to.startsWith(from + '/')) throw new Error('mv: cannot move a folder into itself');
+            if (vfs.has(to) || vfs.isDir(to)) throw new Error(`mv: ${args[1]} already exists`);
+            vfs.renameDir(from, checkName(to));
+            if (this.cwd === from || this.cwd.startsWith(from + '/')) this.cwd = to + this.cwd.slice(from.length);
+            break;
+          }
           if (vfs.isDir(to) && !vfs.has(to)) to = (to ? to + '/' : '') + from.split('/').pop();
           if (to === from) break;
           vfs.set(checkName(to), vfs.get(from));
@@ -272,7 +286,8 @@ export class Session {
         }
         case 'preview':
         case 'open': {
-          const p = at(args[0] || 'index.html');
+          let p = at(args[0] || (vfs.has(at('index.html')) ? 'index.html' : '.'));
+          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.html?$/i, 'preview', 'index.html');
           if (!vfs.has(p)) throw new Error(`preview: ${args[0] || 'index.html'}: No such file`);
           this.onPreview(p);
           break;
@@ -282,7 +297,8 @@ export class Session {
         case 'py': {
           const file = args.find((a) => !a.startsWith('-'));
           if (!file) return this.runPython({ type: 'repl' });
-          const entry = at(file);
+          let entry = at(file);
+          if (!vfs.has(entry) && vfs.isDir(entry)) entry = this.entryIn(entry, /\.py$/i, 'python', 'main.py');
           if (!vfs.has(entry)) throw new Error(`python: can't open file '${file}': No such file`);
           return this.runPython({ type: 'run', entry, argv: args.slice(args.indexOf(file) + 1) });
         }
@@ -294,7 +310,8 @@ export class Session {
         case 'node':
         case 'js': {
           if (!args[0]) throw new Error('Use: node FILE.js');
-          const p = at(args[0]);
+          let p = at(args[0]);
+          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.(js|mjs)$/i, 'node', 'main.js');
           if (!vfs.has(p)) throw new Error(`node: cannot find '${args[0]}'`);
           return this.runJs(p);
         }
@@ -309,6 +326,16 @@ export class Session {
       this.print(e.message + '\n');
     }
     this.prompt();
+  }
+
+  /** The file a command should run when given a folder. */
+  entryIn(dir, kind, cmd, wanted) {
+    const prefix = dir ? dir + '/' : '';
+    const entry = entryFor(this.vfs, dir);
+    if (entry && kind.test(entry)) return entry;
+    const ofKind = this.vfs.list(dir).filter((e) => !e.dir && kind.test(e.name));
+    if (ofKind.length === 1) return prefix + ofKind[0].name;
+    throw new Error(`${cmd}: ${dir || '~'} is a folder. Put a ${wanted} in it, or name the file to run.`);
   }
 
   // ------------------------------------------------------------ runners --
@@ -356,7 +383,7 @@ export class Session {
         finish(after);
       },
     };
-    worker.postMessage({ ...job, files: sent });
+    worker.postMessage({ ...job, files: sent, dirs: this.vfs.allDirs() });
   }
 
   killPython() {

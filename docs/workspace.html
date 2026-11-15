@@ -15,7 +15,7 @@
   <span id="live" class="pill" hidden></span>
   <span class="spacer"></span>
   <span id="idle" class="idle"></span>
-  <button id="run" class="btn primary small" title="Run the open file (Ctrl+Enter)">▶ Run</button>
+  <button id="run" class="btn primary small" title="Run the selected file or folder (Ctrl+Enter)">▶ Run</button>
   <button id="previewBtn" class="btn small">Preview</button>
   <a class="btn small" href="./">Dashboard</a>
 </header>
@@ -25,8 +25,9 @@
       <span>Files</span>
       <span class="side-actions">
         <button id="newFile" class="icon" title="New file">＋</button>
-        <button id="renameFile" class="icon" title="Rename file">✎</button>
-        <button id="deleteFile" class="icon" title="Delete file">🗑</button>
+        <button id="newFolder" class="icon" title="New folder">📁</button>
+        <button id="renameFile" class="icon" title="Rename the selected file or folder">✎</button>
+        <button id="deleteFile" class="icon" title="Delete the selected file or folder">🗑</button>
       </span>
     </div>
     <ul id="files"></ul>
