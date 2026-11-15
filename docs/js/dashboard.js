@@ -3,6 +3,7 @@
 import { backend, demoMode } from './backend.js';
 import { IDLE_MINUTES } from '../config.js';
 import { applyBrand } from './brand.js';
+import { makeZip } from './zip.js';
 
 const root = document.getElementById('app');
 let me = null;
@@ -45,6 +46,7 @@ function authView() {
   const draw = () => {
     const err = errorBox();
     const signup = mode === 'signup';
+    if (mode === 'forgot') return drawForgot();
     const form = h(
       'form',
       {
@@ -74,6 +76,7 @@ function authView() {
         'Password',
         h('input', { name: 'password', type: 'password', required: true, minlength: signup ? 8 : null, autocomplete: signup ? 'new-password' : 'current-password' }),
       ),
+      !signup && h('a', { href: '#', class: 'small forgot', onclick: (ev) => (ev.preventDefault(), (mode = 'forgot'), draw()) }, 'Forgot password?'),
       err,
       h('button', { type: 'submit', class: 'btn primary wide' }, signup ? 'Create account' : 'Sign in'),
       h(
@@ -86,6 +89,44 @@ function authView() {
       signup && demoMode && h('p', { class: 'muted small' }, 'Demo mode: the first account created becomes the admin.'),
     );
     container.replaceChildren(form);
+  };
+
+  const drawForgot = () => {
+    const err = errorBox();
+    const done = h('div', { class: 'notice-box', hidden: true });
+    const email = h('input', { name: 'email', type: 'email', required: true, autocomplete: 'email' });
+    const form = h(
+      'form',
+      {
+        class: 'card auth',
+        onsubmit: async (ev) => {
+          ev.preventDefault();
+          const button = form.querySelector('button[type=submit]');
+          button.disabled = true;
+          err.hidden = true;
+          try {
+            const r = await backend.requestPasswordReset(email.value);
+            done.replaceChildren(
+              h('p', {}, `If ${email.value.trim()} has an account, an email with a link to choose a new password is on its way. Check the spam folder too.`),
+              r?.demoLink && h('p', { class: 'small' }, 'Demo mode sends no email. Open this link: ', h('a', { href: r.demoLink }, 'choose a new password')),
+            );
+            done.hidden = false;
+          } catch (e) {
+            showError(err, e);
+          }
+          button.disabled = false;
+        },
+      },
+      h('h1', { class: 'brand-title' }, 'ClassCode'),
+      h('p', { class: 'muted' }, "Forgot your password? Enter your email and we'll send you a link to choose a new one."),
+      h('label', {}, 'Email', email),
+      err,
+      done,
+      h('button', { type: 'submit', class: 'btn primary wide' }, 'Send reset link'),
+      h('p', { class: 'muted switch' }, h('a', { href: '#', onclick: (ev) => (ev.preventDefault(), (mode = 'login'), draw()) }, '← Back to sign in')),
+    );
+    container.replaceChildren(form);
+    applyBrand(container);
   };
   draw();
   return container;
@@ -317,6 +358,50 @@ function teacherClass(classId) {
     drawMessages();
   };
 
+  // ---- everyone's work in one .zip (a folder per student), e.g. for marking ----
+  const zipBtn = h(
+    'button',
+    {
+      class: 'btn',
+      title: "Download every student's files for this class",
+      onclick: async () => {
+        err.hidden = true;
+        zipBtn.disabled = true;
+        const label = zipBtn.textContent;
+        try {
+          const enc = new TextEncoder();
+          const entries = [];
+          const used = new Set();
+          let n = 0;
+          for (const st of students) {
+            zipBtn.textContent = `Collecting ${++n}/${students.length}…`;
+            // a safe, unique folder name per student
+            let folder = st.displayName.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'student';
+            for (let i = 2; used.has(folder.toLowerCase()); i++) folder = `${st.displayName} (${i})`;
+            used.add(folder.toLowerCase());
+            entries.push({ name: folder + '/', data: new Uint8Array() });
+            for (const f of await backend.listFiles(st.workspaceId)) {
+              let data;
+              if (f.content.startsWith('data:')) data = Uint8Array.from(atob(f.content.slice(f.content.indexOf(',') + 1)), (c) => c.charCodeAt(0));
+              else data = enc.encode(f.content);
+              entries.push({ name: `${folder}/${f.path}`, data: f.path.endsWith('/') ? new Uint8Array() : data });
+            }
+          }
+          const a = h('a', { href: URL.createObjectURL(makeZip(entries)), download: `${(title.textContent || 'class').replace(/[^\w.-]+/g, '_')}-work.zip` });
+          document.body.append(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+        } catch (e) {
+          showError(err, e);
+        }
+        zipBtn.textContent = label;
+        zipBtn.disabled = !students.length;
+      },
+    },
+    "⬇ Download all students' work (.zip)",
+  );
+
   const title = h('h2', {}, 'Class');
   const code = h('code', { class: 'code big' });
   const body = h('tbody');
@@ -324,20 +409,40 @@ function teacherClass(classId) {
   const err = errorBox();
   let students = [];
   let online = new Set();
+  let hands = new Set();
+  const plainTitle = () => document.title.replace(/^✋ \d+ · /, '');
 
   const draw = () => {
     empty.hidden = students.length > 0;
+    document.title = (hands.size ? `✋ ${hands.size} · ` : '') + plainTitle();
+    // raised hands first, then whoever is online
+    const order = [...students].sort((a, b) => hands.has(b.workspaceId) - hands.has(a.workspaceId) || online.has(b.workspaceId) - online.has(a.workspaceId));
     body.replaceChildren(
-      ...students.map((s) => {
+      ...order.map((s) => {
         const on = online.has(s.workspaceId);
+        const up = hands.has(s.workspaceId);
         return h(
           'tr',
-          {},
+          { class: up ? 'hand-up' : '' },
           h('td', {}, h('strong', {}, s.displayName)),
-          h('td', {}, h('span', { class: on ? 'pill on' : 'pill' }, on ? 'Open now' : 'Closed')),
+          h('td', {}, up ? h('span', { class: 'pill hand' }, '✋ Needs help') : h('span', { class: on ? 'pill on' : 'pill' }, on ? 'Open now' : 'Closed')),
           h(
             'td',
             { class: 'actions' },
+            up &&
+              h(
+                'button',
+                {
+                  class: 'btn small',
+                  title: "Lower the student's hand (they see that you've noticed)",
+                  onclick: () => {
+                    channel.send('lower-hand', { workspaceId: s.workspaceId });
+                    hands.delete(s.workspaceId);
+                    draw();
+                  },
+                },
+                'Lower hand',
+              ),
             h('a', { class: 'btn primary small', href: workspaceUrl(s.workspaceId) }, on ? 'Join live' : 'Open workspace'),
             h(
               'button',
@@ -366,6 +471,7 @@ function teacherClass(classId) {
     title.textContent = data.class.name;
     code.textContent = data.class.joinCode;
     students = data.students;
+    if (!zipBtn.textContent.startsWith('Collecting')) zipBtn.disabled = !students.length;
     const starter = await backend.listStarterFiles(classId);
     const files = starter.filter((f) => !f.path.endsWith('/')).map((f) => f.path).sort();
     const folders = starter.length - files.length;
@@ -383,6 +489,7 @@ function teacherClass(classId) {
     .then(() =>
       channel.onPresence((states) => {
         online = new Set(states.map((s) => s.workspaceId).filter(Boolean));
+        hands = new Set(states.filter((s) => s.hand).map((s) => s.workspaceId));
         draw();
       }),
     )
@@ -391,6 +498,7 @@ function teacherClass(classId) {
   cleanup = () => {
     clearInterval(timer);
     channel.close();
+    document.title = plainTitle();
   };
 
   load().catch((e) => showError(err, e));
@@ -432,6 +540,7 @@ function teacherClass(classId) {
     ),
     h('div', { class: 'card broadcast-card' }, h('h3', {}, 'Message the class'), msgForm, msgErr, msgList),
     err,
+    h('div', { class: 'row spread roster-head' }, h('h3', {}, 'Students'), zipBtn),
     h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Student'), h('th', {}, 'Workspace'), h('th', {}, ''))), body),
     empty,
   );

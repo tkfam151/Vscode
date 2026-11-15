@@ -99,6 +99,12 @@ export function create(url, anonKey) {
       return { email: user.email, displayName: p?.displayName || user.email };
     },
 
+    // "Forgot password?": Supabase emails a link to set-password.html
+    async requestPasswordReset(email) {
+      ok(await sb.auth.resetPasswordForEmail(String(email).trim(), { redirectTo: setPasswordUrl() }));
+      return {};
+    },
+
     async setPassword(password) {
       ok(await sb.auth.updateUser({ password }));
     },

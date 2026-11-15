@@ -250,9 +250,19 @@ drop policy if exists "classcode live read" on realtime.messages;
 create policy "classcode live read" on realtime.messages for select to authenticated
   using (public.can_use_topic((select realtime.topic())));
 
+-- On a class channel only the teacher (or an admin) may broadcast (messages,
+-- lowering hands); students may only share their presence (online, ✋).
+-- On a workspace channel the student and the teacher both send.
 drop policy if exists "classcode live write" on realtime.messages;
 create policy "classcode live write" on realtime.messages for insert to authenticated
-  with check (public.can_use_topic((select realtime.topic())));
+  with check (
+    public.can_use_topic((select realtime.topic()))
+    and (
+      realtime.messages.extension = 'presence'
+      or (select realtime.topic()) not like 'class:%'
+      or public.is_class_teacher(substring((select realtime.topic()) from 7)::uuid)
+    )
+  );
 
 -- ---------------------------------------------------- functions the site calls --
 

@@ -10,6 +10,7 @@
 //   resendInvite(id) -> { sent: 'invite' | 'reset', demoLink? }                     admin only
 //   removeStaff(id)                                                                 admin only
 //   invitedUser() -> { email, displayName } | null      on set-password.html, from the email link
+//   requestPasswordReset(email) -> { demoLink? }      "Forgot password?": emails a set-password link
 //   setPassword(password)                               on set-password.html; signs the user in
 //   listClasses()        teacher/admin: [{ id, name, joinCode, studentCount }]
 //                        student: [{ id, name, teacherName, workspaceId }]

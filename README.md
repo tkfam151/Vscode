@@ -5,6 +5,9 @@ A coding classroom that runs on **GitHub Pages + Supabase**. No server to rent o
 - **Admins** create teacher accounts. The teacher gets an email with a link and chooses their own password. Nobody can sign up as a teacher on the website.
 - **Teachers** create classes and get a join code for each class.
 - **Teachers message the whole class**: a message typed on the class page pops up on every student's screen right away, or the next time they open their workspace, and shows on their dashboard. Teachers can delete a message for everyone.
+- **Students raise a hand (✋)** when they need help: the teacher's class page shows who, sorted to the top (and counted in the browser tab), and the teacher can lower it, which tells the student they've been seen.
+- **Teachers download everyone's work** for a class as one `.zip`, with a folder per student, for marking.
+- **"Forgot password?"** on the sign-in page emails a link to choose a new password (needs the email setup below).
 - **Each class has a model workspace**: starter files the teacher writes (and can try out in their own terminal). Every student who joins the class gets their own copy. A button also gives the files to students who joined earlier; it only adds files a student doesn't have, so it never overwrites a student's work.
 - **Students** create their own account, join with the code, and get their own workspace: a VS Code-style editor, a terminal, and a web-page preview.
 - **Teachers watch any student's terminal live**, can type into it, and can **edit the student's files and press Run**. When the student isn't there, the teacher can still open the workspace, edit and run the code (it runs in the teacher's own browser).
@@ -142,7 +145,7 @@ Browser        runs the student's code
 - **Use Chrome or Edge.** Python's `input()` relies on a browser feature that Firefox and Safari may not have yet. Everything else works in any modern browser.
 - **Packages need the internet.** Python's science packages (`numpy`, `pandas`, `matplotlib`, …) load from `cdn.jsdelivr.net` the first time they're imported, `pip install` downloads from `pypi.org` and `files.pythonhosted.org`, and npm packages come from `cdn.jsdelivr.net`. If the school network blocks those addresses, only the built-in libraries work. Try `pip install cowsay` and `npm install lodash` once on your network to check.
 - **Anyone who finds the site can create a student account.** Without a join code it can't see any class, but it does use your Supabase quota.
-- **Students can't reset a forgotten password themselves yet.** An admin can send password resets to teachers from **Manage teachers**; for a student, delete their account in Supabase (**Authentication → Users**) and have them sign up again, or set a new password there.
+- **Forgotten passwords:** anyone can use **Forgot password?** on the sign-in page (this needs the email setup in step 3). Admins can also send a reset to a teacher from **Manage teachers**.
 - **A student's code runs on the student's own device.** A slow laptop means slow programs, and Ctrl+C stops a runaway program by restarting Python.
 - **When a teacher and student type in the same file at once**, both edits are kept, but if they type on the same line at the same moment the result can be jumbled. In practice, take turns on a line.
 - **Supabase free plan limits** apply (database size, simultaneous live connections, messages per month). A typical single class is well inside them; check Supabase's pricing page if you plan to run many classes at once.

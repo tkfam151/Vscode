@@ -59,6 +59,9 @@ input:focus-visible, .btn:focus-visible { outline: 2px solid var(--primary); out
 .notice { margin-bottom: 14px; display: flex; flex-direction: column; gap: 4px; border-color: var(--primary); }
 select { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; }
 .auth .small { margin: 0; }
+.auth .forgot { align-self: flex-end; margin-top: -6px; }
+.notice-box { background: #eef4ff; border-left: 3px solid var(--primary); border-radius: 4px; padding: 8px 12px; font-size: 14px; }
+.notice-box p { margin: 0 0 4px; }
 .brand, .brand-title { display: inline-flex; align-items: center; gap: 10px; }
 .brand .logo { height: 30px; width: auto; display: block; }
 #bar .brand .logo { height: 26px; }
@@ -80,6 +83,8 @@ main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
 .starter { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
 .starter p { margin: 0 0 4px; }
 .broadcast-card { margin-bottom: 16px; }
+.roster-head { margin: 8px 0 8px; }
+.roster-head h3 { margin: 0; }
 .broadcast { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
 textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; resize: vertical; width: 100%; }
 .msgs { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
@@ -194,6 +199,11 @@ body.resizing iframe { pointer-events: none; }
 .zoom { display: inline-flex; align-items: center; }
 #fontSize { min-width: 34px; text-align: center; }
 #saved.error { color: var(--danger); font-weight: 600; }
+
+/* raise hand */
+.btn.hand.raised { background: #fef3c7; border-color: #f59e0b; color: #92400e; }
+.pill.hand { background: #fef3c7; color: #92400e; }
+tr.hand-up td { background: #fffbeb; }
 
 /* teacher messages (student workspace) */
 .announce { position: fixed; top: 54px; right: 16px; z-index: 40; width: min(420px, calc(100vw - 32px)); background: #fff; border: 1px solid var(--line); border-top: 4px solid var(--primary);

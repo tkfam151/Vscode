@@ -1173,7 +1173,22 @@ async function main() {
       touch(); // the teacher working here counts as activity
       session.input(d);
     });
-    classChannel.track({ workspaceId: wsId });
+    // ✋ raise a hand: the teacher's class page shows it until someone lowers it
+    let hand = false;
+    const setHand = (on, note) => {
+      hand = on;
+      classChannel.track({ workspaceId: wsId, hand });
+      $('handBtn').classList.toggle('raised', hand);
+      $('handBtn').title = hand ? 'Your hand is up. Click to lower it.' : 'Let your teacher know you need help';
+      $('handBtn').lastChild.textContent = hand ? ' Hand raised' : ' Ask for help';
+      if (note) $('termnote').textContent = note;
+    };
+    $('handBtn').hidden = false;
+    $('handBtn').onclick = () => setHand(!hand, hand ? '' : 'Your teacher can see your raised hand.');
+    classChannel.on('lower-hand', ({ workspaceId } = {}) => {
+      if (workspaceId === wsId && hand) setHand(false, 'Your teacher has seen your raised hand.');
+    });
+    setHand(false);
     setupMessages();
 
     $('run').onclick = () => {
@@ -1323,10 +1338,11 @@ async function main() {
     let local = null; // the teacher's own terminal session while the student is away
     let localTimer = null;
 
+    let studentHand = false; // the student's ✋, from presence (may arrive before the live connection)
     const setOnline = (on) => {
       online = on;
       live.className = on ? 'pill on' : 'pill';
-      live.textContent = on ? 'Live' : 'Student not here';
+      live.textContent = on ? (studentHand ? 'Live · ✋ needs help' : 'Live') : 'Student not here';
       $('termnote').textContent = on
         ? 'You are in the student\u2019s terminal'
         : 'The student does not have this workspace open. This terminal runs in your browser.';
@@ -1389,7 +1405,10 @@ async function main() {
     channel.on('bye', wentAway);
     // Closing the tab does not always get a goodbye out; presence catches that.
     classChannel.onPresence((states) => {
-      if (!states.some((s) => s.workspaceId === wsId)) wentAway();
+      const me = states.find((s) => s.workspaceId === wsId);
+      studentHand = !!me?.hand;
+      if (!me) return wentAway();
+      if (online) live.textContent = studentHand ? 'Live · ✋ needs help' : 'Live';
     });
 
     term.onData((d) => {

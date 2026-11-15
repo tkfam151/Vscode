@@ -126,6 +126,16 @@ export function create() {
       save(db);
     },
 
+    // Demo mode sends no email: the page shows the reset link instead.
+    async requestPasswordReset(email) {
+      const db = load();
+      const u = db.users.find((x) => x.email === String(email).trim().toLowerCase());
+      if (!u) return {};
+      const demoLink = inviteLink(u);
+      save(db);
+      return { demoLink };
+    },
+
     // ---- set-password page ----
     async invitedUser() {
       const token = new URLSearchParams(location.search).get('invite');
@@ -355,9 +365,9 @@ export function create() {
       }, 2000);
       bc.onmessage = ({ data }) => {
         if (data.event === '__here') {
-          const known = peers.has(data.payload.id);
+          const before = peers.get(data.payload.id);
           peers.set(data.payload.id, { state: data.payload.state, seen: Date.now() });
-          if (!known) emitPresence();
+          if (!before || JSON.stringify(before.state) !== JSON.stringify(data.payload.state)) emitPresence();
         } else if (data.event === '__gone') {
           if (peers.delete(data.payload.id)) emitPresence();
         } else if (data.event === '__who') beat();
