@@ -1,7 +1,7 @@
 // Picks the data layer: Supabase when configured, otherwise the in-browser demo.
 //
 // Both implementations expose the same async API:
-//   init() -> user | null                user = { id, displayName, role: 'admin' | 'teacher' | 'student' }
+//   init() -> user | null                user = { id, displayName, email, role: 'admin' | 'teacher' | 'student' }
 //   signUp({ email, password, displayName }) -> user   (always a student)
 //   signIn({ email, password }) -> user
 //   signOut()

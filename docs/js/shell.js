@@ -288,7 +288,8 @@ export class Session {
     if (this.disposed) return;
     // like zsh: output that didn't end with a newline gets a highlighted % and a line break
     if (!this.atLineStart) this.write('\x1b[7m%\x1b[0m\r\n');
-    this.write(`\x1b[1;32m${this.user}@${this.host}\x1b[0m \x1b[1;34m${this.dirLabel}\x1b[0m % `);
+    // plain, like the default Mac terminal: "name@host folder %", or "email folder %" when there's no host
+    this.write(`${this.host ? `${this.user}@${this.host}` : this.user} ${this.dirLabel} % `);
   }
 
   print(text) {
@@ -1672,15 +1673,33 @@ async function resolveNpm(name, range) {
   }
   return data.version;
 }
+// Fetch the browser build once (so the first run is fast). Returns false when
+// the CDN has no browser build, e.g. for packages that are only terminal programs.
 async function warmNpm(name, version) {
+  let res;
   try {
-    const res = await fetch(`${NPM_CDN}${name}@${version}/+esm`);
-    if (!res.ok) fail(`ERR! ${name}@${version} could not be prepared for the browser (${res.status}).`);
+    res = await fetch(`${NPM_CDN}${name}@${version}/+esm`);
     await res.text();
-  } catch (e) {
-    if (e instanceof ShellError) throw e;
+  } catch {
     fail(`ERR! network: could not download ${name}. Check the internet connection.`);
   }
+  return res.ok;
+}
+async function npmMeta(name, version) {
+  try {
+    const r = await fetch(`${NPM_CDN}${name}@${version}/package.json`);
+    return r.ok ? await r.json() : null;
+  } catch {
+    return null;
+  }
+}
+// What to tell the student about a package that won't fully work in the browser (or null).
+function npmNote(name, meta, browser) {
+  const bins = meta?.bin ? (typeof meta.bin === 'string' ? [name.split('/').pop()] : Object.keys(meta.bin)) : [];
+  if (bins.length && !browser) return `${name} is a terminal program (${bins.join(', ')}). It was added to package.json, but programs like that need a real computer, so it can't run in this browser terminal. ${SERVER_HINT}`;
+  if (bins.length) return `${name} is a terminal program (${bins.join(', ')}). Its command can't run in this browser terminal; your code can still import the parts that work in a browser. ${SERVER_HINT}`;
+  if (!browser) return `${name} was added to package.json, but it has no version that runs in a web browser, so programs here can't import it. ${SERVER_HINT}`;
+  return null;
 }
 
 async function npm(args) {
@@ -1712,7 +1731,7 @@ async function npm(args) {
       const names = Object.keys(all);
       for (const n of names) {
         const v = await resolveNpm(n, all[n]);
-        await warmNpm(n, v);
+        await warmNpm(n, v); // packages without a browser build are fine to keep listed
       }
       this.print(names.length ? `\nadded ${names.length} package${names.length === 1 ? '' : 's'}, and audited ${names.length} package${names.length === 1 ? '' : 's'} in ${took()}\n\nfound 0 vulnerabilities\n` : `\nup to date, audited 1 package in ${took()}\n\nfound 0 vulnerabilities\n`);
       return 0;
@@ -1725,16 +1744,12 @@ async function npm(args) {
       const [, name, range] = m;
       this.print(`\x1b[2m⠋ fetching ${name}...\x1b[0m\r`);
       const version = await resolveNpm(name, range);
-      await warmNpm(name, version);
+      const browser = await warmNpm(name, version);
+      const meta = await npmMeta(name, version);
       this.print('\x1b[2K');
-      // a package that is a terminal program (it has "bin" commands) can't run here
-      try {
-        const meta = await fetch(`${NPM_CDN}${name}@${version}/package.json`).then((r) => (r.ok ? r.json() : null));
-        const bins = meta?.bin ? (typeof meta.bin === 'string' ? [name.split('/').pop()] : Object.keys(meta.bin)) : [];
-        if (bins.length) {
-          cliPackages.push(`${name} is a terminal program (${bins.join(', ')}). Programs like that need a real computer, so its command can't run in this browser terminal; your code can still import the parts that work in a browser. ${SERVER_HINT}`);
-        }
-      } catch {}
+      if (!browser && !meta) fail(`ERR! ${name}@${version} could not be downloaded. Try again in a moment.`);
+      const note = npmNote(name, meta, browser);
+      if (note) cliPackages.push(note);
       if (pj.data.dependencies?.[name] && section !== 'dependencies') delete pj.data.dependencies[name];
       if (pj.data.devDependencies?.[name] && section !== 'devDependencies') delete pj.data.devDependencies[name];
       if (!pj.data[section][name]) added++;

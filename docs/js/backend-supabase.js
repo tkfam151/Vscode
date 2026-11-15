@@ -48,7 +48,7 @@ export function create(url, anonKey) {
   const profile = async (authUser) => {
     if (!authUser) return null;
     const row = ok(await sb.from('profiles').select('id, display_name, role').eq('id', authUser.id).maybeSingle());
-    return row ? { id: row.id, displayName: row.display_name, role: row.role } : null;
+    return row ? { id: row.id, displayName: row.display_name, role: row.role, email: authUser.email } : null;
   };
 
   return {

@@ -15,7 +15,7 @@ const load = () => {
 };
 const save = (db) => localStorage.setItem(DB_KEY, JSON.stringify(db));
 const uid = () => crypto.randomUUID();
-const publicUser = (u) => ({ id: u.id, displayName: u.displayName, role: u.role });
+const publicUser = (u) => ({ id: u.id, displayName: u.displayName, role: u.role, email: u.email });
 
 export function create() {
   let me = null;
