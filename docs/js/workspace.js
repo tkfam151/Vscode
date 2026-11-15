@@ -19,7 +19,7 @@
 /* global Terminal, FitAddon, monaco, require, marked */
 
 import { backend, demoMode } from './backend.js';
-import { IDLE_MINUTES } from '../config.js';
+import { IDLE_MINUTES, SCHOOL_NAME } from '../config.js';
 import { VFS, entryFor } from './vfs.js';
 import { isImage, isDataUrl, imageUrl, readUpload, sizeLabel } from './media.js';
 import { makeZip } from './zip.js';
@@ -85,10 +85,13 @@ async function main() {
     };
   }
   const isTeacher = info.role === 'teacher';
-  // the terminal prompt shows who is typing: their sign-in email, e.g. "tonkla.pcstudent@sisbschool.com ~ %"
+  // the terminal prompt shows who is typing, like "tonkla@SISBADMIN ~ %" for staff and "alice@SISB ~ %" for students
   const shellIdentity = {
-    user: user.email || (user.displayName || 'student').toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'student',
-    host: '',
+    // teachers: their whole name ("Ms Lee" -> mslee); students: their first name
+    user:
+      (user.role === 'student' ? (user.displayName || '').split(/\s+/)[0] : user.displayName || '').toLowerCase().replace(/[^a-z0-9._-]/g, '') ||
+      (user.role === 'student' ? 'student' : 'teacher'),
+    host: (SCHOOL_NAME || 'classcode').replace(/\s+/g, '-') + (user.role === 'teacher' || user.role === 'admin' ? 'ADMIN' : ''),
     onOpen: (p) => {
       if (isTeacher) $('follow').checked = false;
       openFile(p);
