@@ -44,7 +44,18 @@ create table if not exists public.files (
   primary key (workspace_id, path)
 );
 
+-- A class's starter files (the teacher's model workspace). Each student gets
+-- a copy when they join the class.
+create table if not exists public.class_files (
+  class_id uuid not null references public.classes (id) on delete cascade,
+  path text not null check (char_length(path) between 1 and 200),
+  content text not null default '' check (octet_length(content) <= 262144),
+  updated_at timestamptz not null default now(),
+  primary key (class_id, path)
+);
+
 alter table public.profiles enable row level security;
+alter table public.class_files enable row level security;
 alter table public.classes enable row level security;
 alter table public.enrollments enable row level security;
 alter table public.files enable row level security;
@@ -164,6 +175,25 @@ drop policy if exists "student deletes files" on public.files;
 create policy "student deletes files" on public.files for delete to authenticated
   using (public.workspace_role(workspace_id) is not null);
 
+-- Starter files: only the class's teacher (and admins).
+drop policy if exists "teacher manages starter files" on public.class_files;
+create policy "teacher manages starter files" on public.class_files for all to authenticated
+  using (public.is_class_teacher(class_id))
+  with check (public.is_class_teacher(class_id));
+
+create or replace function public.limit_class_files() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if (select count(*) from public.class_files f where f.class_id = new.class_id) >= 100 then
+    raise exception 'A class can have at most 100 starter files';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists classcode_limit_class_files on public.class_files;
+create trigger classcode_limit_class_files before insert on public.class_files
+  for each row execute function public.limit_class_files();
+
 -- Keep one workspace from filling the database.
 create or replace function public.limit_workspace_files() returns trigger
 language plpgsql security definer set search_path = '' as $$
@@ -225,6 +255,7 @@ create or replace function public.join_class(p_code text) returns json
 language plpgsql security definer set search_path = '' as $$
 declare
   v_class public.classes;
+  v_ws uuid;
 begin
   if not exists (select 1 from public.profiles p where p.id = (select auth.uid()) and p.role = 'student') then
     raise exception 'Only students can join classes';
@@ -235,7 +266,13 @@ begin
     raise exception 'No class found with that code';
   end if;
   insert into public.enrollments (class_id, student_id) values (v_class.id, (select auth.uid()))
-  on conflict (class_id, student_id) do nothing;
+  on conflict (class_id, student_id) do nothing
+  returning id into v_ws;
+  -- New to this class: start with a copy of the teacher's starter files.
+  if v_ws is not null then
+    insert into public.files (workspace_id, path, content)
+    select v_ws, cf.path, cf.content from public.class_files cf where cf.class_id = v_class.id;
+  end if;
   return json_build_object('id', v_class.id, 'name', v_class.name);
 end $$;
 
@@ -287,6 +324,29 @@ language sql stable security definer set search_path = '' as $$
   where e.id = p_ws and public.workspace_role(e.id) is not null;
 $$;
 
+-- Give the starter files to students who are already in the class. Only adds
+-- files a student doesn't have; never overwrites a student's own work.
+create or replace function public.copy_starter_files(p_class uuid) returns json
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_files int;
+  v_students int;
+begin
+  if not public.is_class_teacher(p_class) then
+    raise exception 'Class not found';
+  end if;
+  with added as (
+    insert into public.files (workspace_id, path, content)
+    select e.id, cf.path, cf.content
+    from public.enrollments e join public.class_files cf on cf.class_id = e.class_id
+    where e.class_id = p_class
+    on conflict (workspace_id, path) do nothing
+    returning workspace_id
+  )
+  select count(*), count(distinct workspace_id) into v_files, v_students from added;
+  return json_build_object('files', v_files, 'students', v_students);
+end $$;
+
 -- Teacher and admin accounts, for the admin's "Manage teachers" page.
 -- status is 'invited' until the person has set their password from the email.
 create or replace function public.admin_list_staff() returns json
@@ -310,9 +370,13 @@ grant select on public.profiles to authenticated;
 grant select, delete on public.classes to authenticated;
 grant select, delete on public.enrollments to authenticated;
 grant select, insert, update, delete on public.files to authenticated;
+grant select, insert, update, delete on public.class_files to authenticated;
 
 revoke all on function public.handle_new_user() from public, anon, authenticated;
 revoke all on function public.limit_workspace_files() from public, anon, authenticated;
+revoke all on function public.limit_class_files() from public, anon, authenticated;
+revoke all on function public.copy_starter_files(uuid) from public, anon;
+grant execute on function public.copy_starter_files(uuid) to authenticated;
 revoke all on function public.create_class(text) from public, anon;
 revoke all on function public.join_class(text) from public, anon;
 revoke all on function public.my_classes() from public, anon;

@@ -4,6 +4,7 @@ A coding classroom that runs on **GitHub Pages + Supabase**. No server to rent o
 
 - **Admins** create teacher accounts. The teacher gets an email with a link and chooses their own password. Nobody can sign up as a teacher on the website.
 - **Teachers** create classes and get a join code for each class.
+- **Each class has a model workspace**: starter files the teacher writes (and can try out in their own terminal). Every student who joins the class gets their own copy. A button also gives the files to students who joined earlier; it only adds files a student doesn't have, so it never overwrites a student's work.
 - **Students** create their own account, join with the code, and get their own workspace: a VS Code-style editor, a terminal, and a web-page preview.
 - **Teachers watch any student's terminal live**, can type into it, and can **edit the student's files and press Run**. When the student isn't there, the teacher can still open the workspace, edit and run the code (it runs in the teacher's own browser).
 - **Admins can open every class and every student's workspace**, with the same abilities as the class's teacher.
@@ -91,6 +92,7 @@ Browser        runs the student's code
 
 - **Running code**: Python runs through [Pyodide](https://pyodide.org) (Python compiled for the browser), JavaScript runs in a browser worker, and web pages render in a sandboxed frame that cannot touch the rest of the site.
 - **Live view**: the student's tab sends terminal output and file edits over a private Supabase Realtime channel. The teacher's tab shows them and sends back keystrokes, file edits and Run. Only the student, the class's teacher and admins can join a workspace's channel.
+- **Model workspace**: starter files live in their own table (`class_files`). When a student joins, the database copies them into the student's workspace in the same step. Later changes to the model don't change students' copies; use **Give to students already in the class** to add new files to everyone.
 - **Accounts**: everyone who signs up on the site is a student. The `admin-users` function invites teachers by email and gives them the teacher role; the "set password" link lands on `set-password.html`. On **Manage teachers** an admin can resend an invite, send a password-reset email to a teacher who has forgotten theirs, or remove a teacher (which also deletes that teacher's classes and the students' work in them).
 - **Idle close**: the workspace page watches for keyboard, mouse and touch input (the teacher typing also counts). After `IDLE_MINUTES` (set in `docs/config.js`, default 60) the session ends and a "Reopen workspace" button appears. Closing the tab also closes the workspace.
 - **Files** are saved to Supabase as the student types: up to 200 files per workspace, 256 KB each, text only.

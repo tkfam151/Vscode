@@ -16,7 +16,10 @@
 //   createClass(name) -> { id }
 //   deleteClass(id)
 //   getRoster(classId) -> { class: { id, name, joinCode }, students: [{ workspaceId, studentId, displayName }] }
-//   joinClass(code)
+//   listStarterFiles(classId) / saveStarterFile(classId, path, content) / deleteStarterFile(classId, path)
+//                        the class's model workspace; teacher/admin only
+//   copyStarterToStudents(classId) -> { files, students }   adds missing starter files to every student
+//   joinClass(code)      a new student starts with a copy of the starter files
 //   removeStudent(workspaceId)
 //   getWorkspace(id) -> { id, classId, className, studentId, studentName, role: 'student' | 'teacher' }
 //   listFiles(workspaceId) -> [{ path, content }]

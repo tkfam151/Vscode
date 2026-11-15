@@ -11,6 +11,10 @@
 //   in {d}           teacher -> student   teacher's keystrokes
 //   file {path, content} / unlink {path} / active {path}   student -> teacher
 //   bye              student -> teacher   workspace closed
+//
+// Starter mode (workspace.html?starter=<class id>): the teacher edits the
+// class's starter files, which every student gets a copy of when they join.
+// No live channel; the terminal runs in the teacher's browser for trying things.
 
 /* global Terminal, FitAddon, monaco, require */
 
@@ -20,7 +24,9 @@ import { VFS } from './vfs.js';
 import { Session } from './shell.js';
 
 const $ = (id) => document.getElementById(id);
-const wsId = new URLSearchParams(location.search).get('ws');
+const params = new URLSearchParams(location.search);
+const starterClass = params.get('starter');
+const wsId = starterClass ? null : params.get('ws');
 const IDLE_MS = IDLE_MINUTES * 60_000;
 const SCROLLBACK_BYTES = 60_000;
 const STARTER = 'print("Hello from ClassCode!")\n';
@@ -37,22 +43,45 @@ const fatal = (msg) => overlay('Could not open this workspace', msg, 'Try again'
 
 async function main() {
   const user = await backend.init();
-  if (!user || !wsId) return location.replace('./');
-  const info = await backend.getWorkspace(wsId);
+  if (!user || !(wsId || starterClass)) return location.replace('./');
+
+  // Where this page's files are stored.
+  let info, store;
+  if (starterClass) {
+    const roster = await backend.getRoster(starterClass);
+    info = { role: 'starter', className: roster.class.name, studentName: 'Starter files' };
+    store = {
+      list: () => backend.listStarterFiles(starterClass),
+      save: (path, content) => backend.saveStarterFile(starterClass, path, content),
+      remove: (path) => backend.deleteStarterFile(starterClass, path),
+    };
+  } else {
+    info = await backend.getWorkspace(wsId);
+    store = {
+      list: () => backend.listFiles(wsId),
+      save: (path, content) => backend.saveFile(wsId, path, content),
+      remove: (path) => backend.deleteFile(wsId, path),
+    };
+  }
   const isTeacher = info.role === 'teacher';
+  const isStarter = info.role === 'starter';
 
   document.title = `${info.studentName} · ${info.className}`;
   $('who').textContent = `${info.className} · ${info.studentName}`;
-  $('teacherBadge').hidden = !isTeacher;
+  $('teacherBadge').hidden = !isTeacher && !isStarter;
+  if (isStarter) {
+    $('teacherBadge').textContent = 'Model workspace';
+    document.querySelector('#bar a.btn[href="./"]').href = `./#/class/${encodeURIComponent(starterClass)}`;
+  }
   $('followWrap').hidden = !isTeacher;
 
   // ---------------------------------------------------------------- files --
   const vfs = new VFS();
-  const stored = await backend.listFiles(wsId);
+  const stored = await store.list();
   for (const f of stored) vfs.files.set(f.path, f.content);
-  if (!isTeacher && !stored.length) {
+  if (info.role === 'student' && !stored.length) {
     vfs.files.set('main.py', STARTER);
-    backend.saveFile(wsId, 'main.py', STARTER).catch(() => {});
+    store.save('main.py', STARTER).catch(() => {});
   }
 
   // --------------------------------------------------------------- editor --
@@ -172,8 +201,8 @@ async function main() {
     showSaved();
     later(saveTimers, path, 700, async () => {
       try {
-        if (vfs.has(path)) await backend.saveFile(wsId, path, vfs.get(path));
-        else await backend.deleteFile(wsId, path);
+        if (vfs.has(path)) await store.save(path, vfs.get(path));
+        else await store.remove(path);
       } catch (e) {
         $('saved').textContent = `Not saved: ${e.message}`;
         pendingSaves--;
@@ -245,8 +274,9 @@ async function main() {
   fit();
   new ResizeObserver(fit).observe($('terminal'));
 
-  const channel = backend.channel(`ws:${wsId}`);
-  const classChannel = backend.channel(`class:${info.classId}`);
+  const noChannel = { ready: Promise.resolve(), on() {}, send() {}, track() {}, untrack() {}, onPresence() {}, close() {} };
+  const channel = isStarter ? noChannel : backend.channel(`ws:${wsId}`);
+  const classChannel = isStarter ? noChannel : backend.channel(`class:${info.classId}`);
   try {
     await Promise.all([channel.ready, classChannel.ready]);
   } catch (e) {
@@ -298,7 +328,8 @@ async function main() {
   });
   channel.on('unlink', ({ path }) => vfs.delete(String(path), 'remote'));
 
-  if (isTeacher) teacherMode();
+  if (isStarter) starterMode();
+  else if (isTeacher) teacherMode();
   else studentMode();
   openFile(vfs.has('main.py') ? 'main.py' : vfs.paths()[0] || null, { announce: false });
 
@@ -397,6 +428,18 @@ async function main() {
     term.focus();
   }
 
+  // -------------------------------------------------------------- starter --
+  function starterMode() {
+    const session = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview });
+    term.onData((d) => session.input(d));
+    $('run').onclick = () => {
+      runActive(session);
+      term.focus();
+    };
+    $('termnote').textContent = 'Try your starter code here. Students don\u2019t see this terminal.';
+    session.start();
+  }
+
   // -------------------------------------------------------------- teacher --
   // Teachers and admins. When the student has the workspace open, the
   // terminal is the student's (live, both can type). When the student is not
@@ -448,7 +491,7 @@ async function main() {
       term.write(String(text || ''));
       // the student may have changed files while we were not listening
       try {
-        const fresh = await backend.listFiles(wsId);
+        const fresh = await store.list();
         const seen = new Set(fresh.map((f) => f.path));
         for (const f of fresh) vfs.set(f.path, f.content, 'remote');
         for (const p of vfs.paths()) if (!seen.has(p)) vfs.delete(p, 'remote');

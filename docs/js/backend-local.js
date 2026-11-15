@@ -26,6 +26,12 @@ export function create() {
     const ok = !role || (role === 'teacher' ? isStaff(me) : me.role === role);
     if (!ok) throw new Error('Not allowed');
   };
+  const ownClass = (db, classId) => {
+    need('teacher');
+    const c = db.classes.find((x) => x.id === classId && (x.teacherId === me.id || me.role === 'admin'));
+    if (!c) throw new Error('Class not found');
+    return c;
+  };
   const inviteLink = (u) => {
     u.inviteToken = uid();
     return new URL('set-password.html', location.href).href.split(/[?#]/)[0] + '?invite=' + u.inviteToken;
@@ -185,6 +191,7 @@ export function create() {
       for (const e of db.enrollments.filter((x) => x.classId === id)) delete db.files[e.id];
       db.enrollments = db.enrollments.filter((e) => e.classId !== id);
       db.classes = db.classes.filter((c) => c.id !== id);
+      if (db.classFiles) delete db.classFiles[id];
       save(db);
     },
 
@@ -200,13 +207,54 @@ export function create() {
       return { class: { id: c.id, name: c.name, joinCode: c.joinCode }, students };
     },
 
+    // ---- starter files ----
+    async listStarterFiles(classId) {
+      const db = load();
+      ownClass(db, classId);
+      return Object.entries(db.classFiles?.[classId] || {}).map(([path, content]) => ({ path, content }));
+    },
+
+    async saveStarterFile(classId, path, content) {
+      const db = load();
+      ownClass(db, classId);
+      ((db.classFiles ||= {})[classId] ||= {})[path] = content;
+      save(db);
+    },
+
+    async deleteStarterFile(classId, path) {
+      const db = load();
+      ownClass(db, classId);
+      if (db.classFiles?.[classId]) delete db.classFiles[classId][path];
+      save(db);
+    },
+
+    async copyStarterToStudents(classId) {
+      const db = load();
+      ownClass(db, classId);
+      let files = 0;
+      let students = 0;
+      for (const e of db.enrollments.filter((x) => x.classId === classId)) {
+        const mine = (db.files[e.id] ||= {});
+        let added = 0;
+        for (const [path, content] of Object.entries(db.classFiles?.[classId] || {})) {
+          if (!(path in mine)) (mine[path] = content), added++;
+        }
+        files += added;
+        if (added) students++;
+      }
+      save(db);
+      return { files, students };
+    },
+
     async joinClass(code) {
       need('student');
       const db = load();
       const c = db.classes.find((x) => x.joinCode === code.toUpperCase().replace(/[^A-Z0-9]/g, ''));
       if (!c) throw new Error('No class found with that code');
       if (!db.enrollments.some((e) => e.classId === c.id && e.studentId === me.id)) {
-        db.enrollments.push({ id: uid(), classId: c.id, studentId: me.id });
+        const e = { id: uid(), classId: c.id, studentId: me.id };
+        db.enrollments.push(e);
+        db.files[e.id] = { ...(db.classFiles?.[c.id] || {}) }; // a copy of the starter files
         save(db);
       }
     },

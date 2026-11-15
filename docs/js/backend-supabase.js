@@ -110,6 +110,23 @@ export function create(url, anonKey) {
       return data;
     },
 
+    // ---- starter files (the teacher's model workspace for a class) ----
+    async listStarterFiles(classId) {
+      return ok(await sb.from('class_files').select('path, content').eq('class_id', classId));
+    },
+
+    async saveStarterFile(classId, path, content) {
+      ok(await sb.from('class_files').upsert({ class_id: classId, path, content, updated_at: new Date().toISOString() }));
+    },
+
+    async deleteStarterFile(classId, path) {
+      ok(await sb.from('class_files').delete().eq('class_id', classId).eq('path', path));
+    },
+
+    async copyStarterToStudents(classId) {
+      return ok(await sb.rpc('copy_starter_files', { p_class: classId }));
+    },
+
     async joinClass(code) {
       ok(await sb.rpc('join_class', { p_code: code }));
     },

@@ -216,6 +216,27 @@ function teacherHome() {
 }
 
 function teacherClass(classId) {
+  const starterInfo = h('p', { class: 'small' });
+  const copyBtn = h(
+    'button',
+    {
+      class: 'btn',
+      title: 'Adds any starter files a student is missing. Files a student already has are left as they are.',
+      onclick: async () => {
+        if (!confirm('Give the starter files to students already in this class?\n\nStudents get any starter files they don\'t have yet. Files they already have, including their own changes, are not touched.')) return;
+        err.hidden = true;
+        copyBtn.disabled = true;
+        try {
+          const r = await backend.copyStarterToStudents(classId);
+          alert(r.files ? `Added ${r.files} file${r.files === 1 ? '' : 's'} for ${r.students} student${r.students === 1 ? '' : 's'}.` : 'Every student already has all the starter files.');
+        } catch (e) {
+          showError(err, e);
+        }
+        copyBtn.disabled = false;
+      },
+    },
+    'Give to students already in the class',
+  );
   const title = h('h2', {}, 'Class');
   const code = h('code', { class: 'code big' });
   const body = h('tbody');
@@ -265,6 +286,11 @@ function teacherClass(classId) {
     title.textContent = data.class.name;
     code.textContent = data.class.joinCode;
     students = data.students;
+    const starter = await backend.listStarterFiles(classId);
+    starterInfo.textContent = starter.length
+      ? `${starter.length} file${starter.length === 1 ? '' : 's'}: ${starter.map((f) => f.path).sort().slice(0, 6).join(', ')}${starter.length > 6 ? ', …' : ''}`
+      : 'No starter files yet. New students start with a one-line main.py.';
+    copyBtn.disabled = !starter.length || !students.length;
     draw();
   };
 
@@ -309,6 +335,17 @@ function teacherClass(classId) {
       ),
     ),
     h('div', { class: 'card joinbox' }, h('span', {}, 'Students join with this code:'), code),
+    h(
+      'div',
+      { class: 'card starter' },
+      h('div', {}, h('h3', {}, 'Model workspace'), h('p', { class: 'muted' }, 'Starter files every student gets a copy of when they join this class.'), starterInfo),
+      h(
+        'div',
+        { class: 'row' },
+        h('a', { class: 'btn primary', href: `workspace.html?starter=${encodeURIComponent(classId)}` }, 'Edit model workspace'),
+        copyBtn,
+      ),
+    ),
     err,
     h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Student'), h('th', {}, 'Workspace'), h('th', {}, ''))), body),
     empty,
