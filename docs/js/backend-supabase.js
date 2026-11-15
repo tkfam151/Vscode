@@ -11,7 +11,18 @@ export function create(url, anonKey) {
     return data;
   };
 
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  })();
   const friendly = (msg) => {
+    // the browser couldn't reach Supabase at all (no internet, wrong address in config.js, blocked or paused project)
+    if (/failed to fetch|networkerror|load failed|network request failed|fetch failed/i.test(msg)) {
+      return `Can't reach the ClassCode server (${host}). Check the internet connection. If it keeps happening, the Supabase project may be paused, or SUPABASE_URL in config.js may be wrong.`;
+    }
     if (/invalid login credentials/i.test(msg)) return 'Wrong email or password';
     if (/already registered/i.test(msg)) return 'That email already has an account';
     if (/email not confirmed/i.test(msg)) return 'Check your email and confirm your account first';
