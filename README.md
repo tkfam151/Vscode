@@ -23,10 +23,13 @@ Students can write any language (the editor colours 80+ languages, including Jav
 | **SQL (SQLite)** | **Run** on a `.sql` file prints result tables; `sqlite` opens an interactive `sqlite>` prompt. Each run starts with an empty database. |
 | **Lua** | **Run**, `lua game.lua` (Lua 5.3; `io.read` input isn't supported) |
 | **Shell scripts** | **Run**, `bash build.sh`: runs the terminal commands below, one per line |
-| **Shell basics** | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `echo > file`, `run FILE`, `clear`, `help` |
+| **Packages** | `pip install NAME` (also `-r requirements.txt`, `pip list`, `uninstall`, `freeze`, `show`) and `npm install NAME` (also `npm init`, `uninstall`, `ls`, `run`, `start`, `test`). pip remembers packages in `requirements.txt` and npm in `package.json`, so they come back automatically next time. JavaScript can `require()` or `import` installed packages. |
+| **A Mac-style terminal** | `alice@SISB ~ %` prompt, Tab completion, history, pipes (`cat nums.txt \| sort -n \| head`), `&&` `\|\|` `;`, redirects (`> >> <`), `*.py` wildcards, `$VARIABLES` and `$?`, and `ls -la`, `cd`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `tree`, `sort`, `uniq`, `mkdir -p`, `cp -r`, `mv`, `rm -r`, `history`, `export`, `which`, `open`, `code FILE`… Programs can read typed or piped input (`echo 5 \| python double.py`). |
 | **Folders** | Make folders with the 📁 button or `mkdir`. Select a folder and press **Run** (or type `run folder`) to run its main file: `main.py`, `__main__.py`, `app.py`, `index.html`, `main.js`, `index.js`, `main.ts`, `main.lua`, `main.sql` or `main.sh`. Python runs inside that folder, so files next to each other can import each other. |
 
 Java, C, C++, C#, Go, Rust, Ruby, PHP and other compiled languages can be written and saved but not run here: pressing Run explains that. They need the server version ([SERVER.md](SERVER.md)).
+
+**About packages:** pip and npm download real packages from the internet (PyPI through Pyodide, and npm through the jsDelivr CDN), so the school network must allow `pypi.org`, `files.pythonhosted.org` and `cdn.jsdelivr.net`. In the browser, pip can install pure-Python packages plus the science packages Pyodide provides (numpy, pandas, matplotlib, scikit-learn, …), and npm packages work when they run in a browser (lodash, dayjs, chalk-free utilities, validators, …). Packages that need a real computer, such as web servers (express), database drivers or anything with compiled parts, don't. Tools like git, apt, brew, gcc and java show a clear "not available here" message. For a real Linux terminal with everything, use the server version.
 
 ## School logo and name
 

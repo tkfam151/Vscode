@@ -19,7 +19,7 @@
 /* global Terminal, FitAddon, monaco, require, marked */
 
 import { backend, demoMode } from './backend.js';
-import { IDLE_MINUTES } from '../config.js';
+import { IDLE_MINUTES, SCHOOL_NAME } from '../config.js';
 import { VFS, entryFor } from './vfs.js';
 import { isImage, isDataUrl, imageUrl, readUpload, sizeLabel } from './media.js';
 import { makeZip } from './zip.js';
@@ -85,6 +85,15 @@ async function main() {
     };
   }
   const isTeacher = info.role === 'teacher';
+  // the terminal prompt shows who is typing, like "alice@SISB ~ %"
+  const shellIdentity = {
+    user: (user.displayName || 'student').split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'student',
+    host: (SCHOOL_NAME || 'classcode').replace(/\s+/g, '-'),
+    onOpen: (p) => {
+      if (isTeacher) $('follow').checked = false;
+      openFile(p);
+    },
+  };
   const isStarter = info.role === 'starter';
 
   document.title = `${info.studentName} · ${info.className}`;
@@ -1074,7 +1083,7 @@ async function main() {
       }, 60);
     };
 
-    const session = new Session({ write, vfs, onPreview: showPreview, compileTs });
+    const session = new Session({ write, vfs, onPreview: showPreview, compileTs, ...shellIdentity });
     term.onData((d) => session.input(d));
     // The snapshot already holds everything written so far, so drop output still waiting to be sent.
     const snapshot = () => {
@@ -1144,7 +1153,7 @@ async function main() {
 
   // -------------------------------------------------------------- starter --
   function starterMode() {
-    const session = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview, compileTs });
+    const session = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview, compileTs, ...shellIdentity });
     term.onData((d) => session.input(d));
     $('run').onclick = () => {
       runActive(session);
@@ -1178,7 +1187,7 @@ async function main() {
       clearTimeout(localTimer);
       if (local || online) return;
       term.reset();
-      local = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview, compileTs });
+      local = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview, compileTs, ...shellIdentity });
       local.start();
     };
     const stopLocal = () => {

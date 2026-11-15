@@ -1,11 +1,12 @@
 // Runs Python (Pyodide) off the main thread.
 //
-// in:  { type: 'run',  files: [[path, content]], entry, argv }
-//      { type: 'repl', files: [[path, content]] }
-//      { type: 'pip',  packages: [name] }
+// in:  { type: 'run',  files: [[path, content]], dirs, entry, argv, requirements }
+//      { type: 'code', files, dirs, code, argv, cwd, requirements }     python -c "..."
+//      { type: 'repl', files, dirs, requirements }
+//      { type: 'pip',  action: 'install' | 'uninstall' | 'list' | 'freeze' | 'show', args: [...] }
 //      { type: 'stdin', line }   { type: 'eof' }
 // out: { type: 'out', data }                       text for the terminal
-//      { type: 'done', changed: [[path, content]], deleted: [path] }
+//      { type: 'done', status, changed: [[path, content]], deleted: [path], installed?: [name] }
 
 import { loadPyodide } from '../vendor/pyodide/pyodide.mjs';
 
@@ -66,25 +67,135 @@ def _cc_forget_project_modules():
         if f.startswith('${ROOT}/'):
             del sys.modules[name]
 
+def _cc_exit_status(e):
+    code = e.code
+    if code is None:
+        return 0
+    if isinstance(code, int):
+        return code
+    print(code, file=sys.stderr)
+    return 1
+
+def _cc_report():
+    et, ev, tb = sys.exc_info()
+    while tb is not None and not tb.tb_frame.f_code.co_filename.startswith(('${ROOT}/', '<string>')):
+        tb = tb.tb_next
+    traceback.print_exception(et, ev, tb)
+
+# Runs a program like "python file.py"; returns the exit status.
 def _cc_run(path, argv):
     os.chdir(os.path.dirname(path) or '${ROOT}')
     sys.argv = [os.path.basename(path)] + list(argv)
     sys.path[0:0] = [os.path.dirname(path)]
     try:
         runpy.run_path(path, run_name='__main__')
-    except SystemExit:
-        pass
+        return 0
+    except SystemExit as e:
+        return _cc_exit_status(e)
     except KeyboardInterrupt:
         print("KeyboardInterrupt")
+        return 130
     except BaseException:
-        et, ev, tb = sys.exc_info()
-        while tb is not None and not tb.tb_frame.f_code.co_filename.startswith('${ROOT}/'):
-            tb = tb.tb_next
-        traceback.print_exception(et, ev, tb)
+        _cc_report()
+        return 1
+    finally:
+        sys.path.pop(0)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        _cc_forget_project_modules()
+
+# python -c "code"
+def _cc_code(src, argv, cwd):
+    os.chdir(cwd)
+    sys.argv = ['-c'] + list(argv)
+    sys.path[0:0] = [cwd]
+    try:
+        exec(compile(src, '<string>', 'exec'), {'__name__': '__main__'})
+        return 0
+    except SystemExit as e:
+        return _cc_exit_status(e)
+    except BaseException:
+        _cc_report()
+        return 1
     finally:
         sys.path.pop(0)
         sys.stdout.flush()
         _cc_forget_project_modules()
+
+# pip, on top of micropip (pure-Python packages from PyPI, and Pyodide's own builds of numpy, pandas, ...)
+def _cc_pip_error(e, spec):
+    msg = str(e)
+    if "pure Python 3 wheel" in msg or "Can't find a pure" in msg:
+        return f"ERROR: {spec} needs compiled code that isn't available in the browser. Only pure-Python packages, and the ones Pyodide provides (numpy, pandas, matplotlib, ...), can be installed here."
+    if "No matching distribution" in msg or "Can't fetch metadata" in msg or "404" in msg:
+        return f"ERROR: No matching distribution found for {spec}"
+    if "fetch" in msg.lower() or "network" in msg.lower():
+        return f"ERROR: Could not reach the package index to download {spec}. Check the internet connection."
+    return f"ERROR: {msg}"
+
+async def _cc_pip(action, args):
+    import micropip
+    pkgs = lambda: {k.lower(): v for k, v in micropip.list().items()}
+    if action == 'install':
+        added, status = [], 0
+        for spec in args:
+            before = {k: v.version for k, v in pkgs().items()}
+            print(f"Collecting {spec}")
+            try:
+                await micropip.install(spec)
+            except BaseException as e:
+                print(_cc_pip_error(e, spec))
+                status = 1
+                continue
+            now = pkgs()
+            new = [f"{v.name}-{v.version}" for k, v in now.items() if before.get(k) != v.version]
+            if new:
+                print("Successfully installed " + " ".join(sorted(new)))
+            else:
+                base = spec.split('=')[0].split('<')[0].split('>')[0].strip().lower()
+                v = now.get(base)
+                print(f"Requirement already satisfied: {spec}" + (f" ({v.version})" if v else ""))
+            added.append(spec)
+        return [status, added]
+    if action == 'uninstall':
+        status = 0
+        for name in args:
+            v = pkgs().get(name.lower())
+            if not v:
+                print(f"WARNING: Skipping {name} as it is not installed.")
+                continue
+            try:
+                micropip.uninstall(name)
+                print(f"Successfully uninstalled {v.name}-{v.version}")
+            except BaseException as e:
+                print(f"ERROR: {e}")
+                status = 1
+        return [status, []]
+    if action in ('list', 'freeze'):
+        rows = sorted(((v.name, v.version) for v in pkgs().values()), key=lambda r: r[0].lower())
+        if action == 'freeze':
+            for n, ver in rows:
+                print(f"{n}=={ver}")
+        else:
+            w = max([len('Package')] + [len(n) for n, _ in rows])
+            vw = max([len('Version')] + [len(ver) for _, ver in rows])
+            print('Package'.ljust(w) + ' ' + 'Version')
+            print('-' * w + ' ' + '-' * vw)
+            for n, ver in rows:
+                print(n.ljust(w) + ' ' + ver)
+        return [0, []]
+    if action == 'show':
+        status = 0
+        for name in args:
+            v = pkgs().get(name.lower())
+            if not v:
+                print(f"WARNING: Package(s) not found: {name}")
+                status = 1
+                continue
+            print(f"Name: {v.name}\\nVersion: {v.version}\\nSource: {v.source}")
+        return [status, []]
+    print(f'ERROR: unknown command "{action}"')
+    return [1, []]
 
 def _cc_repl():
     os.chdir('${ROOT}')
@@ -186,16 +297,38 @@ function diffProject(py, files) {
   return { changed, deleted: [...before.keys()].filter((p) => !seen.has(p)) };
 }
 
-async function withProject(files, fn, dirs = []) {
+// Packages named in requirements.txt are installed before the program runs
+// (once per Python session), so "pip install" lasts like on a real computer.
+const installedReqs = new Set();
+async function ensureRequirements(py, reqs = []) {
+  const missing = reqs.filter((r) => !installedReqs.has(r));
+  if (!missing.length) return;
+  out(`\x1b[2mInstalling requirements: ${missing.join(', ')}\x1b[0m\n`);
+  try {
+    await py.loadPackage('micropip', { messageCallback: () => {}, errorCallback: () => {} });
+    const micropip = py.pyimport('micropip');
+    for (const r of missing) {
+      try {
+        await micropip.install(r);
+        installedReqs.add(r);
+      } catch (e) {
+        out(`WARNING: could not install ${r} (${String(e.message || e).split('\n').pop()})\n`);
+      }
+    }
+    micropip.destroy?.();
+  } catch (e) {
+    out(`WARNING: could not install packages: ${e.message || e}\n`);
+  }
+}
+
+async function withProject(files, fn, dirs = [], requirements = []) {
   let py;
   try {
     py = await boot();
   } catch (e) {
     out(`Could not start Python: ${e.message}\n`);
-    return postMessage({ type: 'done', changed: [], deleted: [] });
+    return postMessage({ type: 'done', status: 1, changed: [], deleted: [] });
   }
-  lines.length = 0;
-  eof = false;
   try {
     // The last program may have left Python inside a project folder; step out
     // before clearing the project, or removing that folder fails.
@@ -203,18 +336,22 @@ async function withProject(files, fn, dirs = []) {
     writeProject(py, files, dirs);
   } catch (e) {
     out(`Could not prepare the files: ${e.message || e.name || e}\n`);
-    return postMessage({ type: 'done', changed: [], deleted: [] });
+    return postMessage({ type: 'done', status: 1, changed: [], deleted: [] });
   }
+  let status = 0;
   try {
-    await fn(py);
+    await ensureRequirements(py, requirements);
+    const r = await fn(py);
+    if (typeof r === 'number') status = r;
   } catch (e) {
     out(String(e.message || e) + '\n');
+    status = 1;
   }
   let result = { changed: [], deleted: [] };
   try {
     result = diffProject(py, files);
   } catch {}
-  postMessage({ type: 'done', ...result });
+  postMessage({ type: 'done', status, ...result });
 }
 
 self.onmessage = async ({ data }) => {
@@ -231,30 +368,67 @@ self.onmessage = async ({ data }) => {
       waiting = null;
       w(null);
     }
-  } else if (data.type === 'run') {
-    await withProject(data.files, async (py) => {
-      const source = new Map(data.files).get(data.entry) ?? '';
-      try {
-        await py.loadPackagesFromImports(source, { messageCallback: () => {}, errorCallback: () => {} });
-      } catch {
-        // offline or unknown package: let the import fail with Python's own error
-      }
-      py.globals.set('_cc_path', `${ROOT}/${data.entry}`);
-      py.globals.set('_cc_argv', py.toPy(data.argv || []));
-      await py.runPythonAsync('_cc_run(_cc_path, _cc_argv)');
-    }, data.dirs);
+  } else if (data.type === 'run' || data.type === 'code' || data.type === 'repl') {
+    // fresh input for each program; piped-in lines arrive right after this message
+    lines.length = 0;
+    eof = false;
+  }
+  if (data.type === 'run') {
+    await withProject(
+      data.files,
+      async (py) => {
+        const source = new Map(data.files).get(data.entry) ?? '';
+        try {
+          await py.loadPackagesFromImports(source, { messageCallback: () => {}, errorCallback: () => {} });
+        } catch {
+          // offline or unknown package: let the import fail with Python's own error
+        }
+        py.globals.set('_cc_path', `${ROOT}/${data.entry}`);
+        py.globals.set('_cc_argv', py.toPy(data.argv || []));
+        return py.runPythonAsync('_cc_run(_cc_path, _cc_argv)');
+      },
+      data.dirs,
+      data.requirements,
+    );
+  } else if (data.type === 'code') {
+    await withProject(
+      data.files,
+      async (py) => {
+        try {
+          await py.loadPackagesFromImports(data.code, { messageCallback: () => {}, errorCallback: () => {} });
+        } catch {}
+        py.globals.set('_cc_src', data.code);
+        py.globals.set('_cc_argv', py.toPy(data.argv || []));
+        py.globals.set('_cc_cwd', data.cwd ? `${ROOT}/${data.cwd}` : ROOT);
+        return py.runPythonAsync('_cc_code(_cc_src, _cc_argv, _cc_cwd)');
+      },
+      data.dirs,
+      data.requirements,
+    );
   } else if (data.type === 'repl') {
-    await withProject(data.files, (py) => py.runPythonAsync('_cc_repl()'), data.dirs);
+    await withProject(data.files, (py) => py.runPythonAsync('_cc_repl()'), data.dirs, data.requirements);
   } else if (data.type === 'pip') {
-    await withProject([], async (py) => {
-      await py.loadPackage('micropip', { messageCallback: () => {} });
-      const micropip = py.pyimport('micropip');
-      for (const name of data.packages) {
-        out(`Installing ${name}...\n`);
-        await micropip.install(name);
-      }
-      out('Done.\n');
-    }).catch(() => {});
+    let py;
+    try {
+      py = await boot();
+      await py.loadPackage('micropip', { messageCallback: () => {}, errorCallback: () => {} });
+    } catch (e) {
+      out(`ERROR: pip isn't available (${e.message || e}). Check the internet connection.\n`);
+      return postMessage({ type: 'done', status: 1, changed: [], deleted: [] });
+    }
+    let status = 1;
+    let installed = [];
+    try {
+      py.globals.set('_cc_action', data.action);
+      py.globals.set('_cc_args', py.toPy(data.args || []));
+      const r = await py.runPythonAsync('await _cc_pip(_cc_action, _cc_args)');
+      [status, installed] = r.toJs();
+      r.destroy();
+      for (const spec of installed) installedReqs.add(spec);
+    } catch (e) {
+      out(`ERROR: ${e.message || e}\n`);
+    }
+    postMessage({ type: 'done', status, changed: [], deleted: [], installed });
   }
 };
 
