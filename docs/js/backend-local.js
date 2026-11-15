@@ -85,7 +85,7 @@ export function create() {
       need('admin');
       return load()
         .users.filter(isStaff)
-        .map((u) => ({ id: u.id, displayName: u.displayName, role: u.role, email: u.email, status: u.pending ? 'invited' : 'active' }))
+        .map((u) => ({ id: u.id, displayName: u.displayName, role: u.role, email: u.email, status: u.pending ? 'invited' : 'active', classCount: load().classes.filter((c) => c.teacherId === u.id).length }))
         .sort((a, b) => a.role.localeCompare(b.role) || a.displayName.localeCompare(b.displayName));
     },
 
@@ -168,6 +168,7 @@ export function create() {
             joinCode: c.joinCode,
             studentCount: db.enrollments.filter((e) => e.classId === c.id && (e.kind || 'student') === 'student').length,
             teacherName: db.users.find((u) => u.id === c.teacherId)?.displayName || '',
+            teacherId: c.teacherId,
             mine: c.teacherId === me.id,
           }))
           .sort((a, b) => Number(b.mine) - Number(a.mine));
@@ -181,14 +182,19 @@ export function create() {
         });
     },
 
-    async createClass(name) {
+    async createClass(name, teacherId) {
       need('teacher');
       const db = load();
+      const owner = teacherId || me.id;
+      if (owner !== me.id) {
+        if (me.role !== 'admin') throw new Error('Only admins can create classes for other teachers');
+        if (!db.users.some((u) => u.id === owner && isStaff(u))) throw new Error('That person is not a teacher');
+      }
       let joinCode;
       do {
         joinCode = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
       } while (db.classes.some((c) => c.joinCode === joinCode));
-      const c = { id: uid(), teacherId: me.id, name: name.trim(), joinCode };
+      const c = { id: uid(), teacherId: owner, name: name.trim(), joinCode };
       db.classes.push(c);
       save(db);
       return { id: c.id };
@@ -214,7 +220,8 @@ export function create() {
         .filter((e) => e.classId === classId && (e.kind || 'student') === 'student')
         .map((e) => ({ workspaceId: e.id, studentId: e.studentId, displayName: db.users.find((u) => u.id === e.studentId)?.displayName || '' }))
         .sort((a, b) => a.displayName.localeCompare(b.displayName));
-      return { class: { id: c.id, name: c.name, joinCode: c.joinCode }, students };
+      const teacherName = db.users.find((u) => u.id === c.teacherId)?.displayName || '';
+      return { class: { id: c.id, name: c.name, joinCode: c.joinCode, teacherId: c.teacherId, teacherName }, students };
     },
 
     // ---- announcements ----
@@ -291,6 +298,17 @@ export function create() {
     },
 
     // the teacher's own workspace in a class (made on first use, with the starter files)
+    async setClassTeacher(classId, teacherId) {
+      need('admin');
+      const db = load();
+      const c = db.classes.find((x) => x.id === classId);
+      if (!c) throw new Error('Class not found');
+      if (!db.users.some((u) => u.id === teacherId && isStaff(u))) throw new Error('That person is not a teacher');
+      c.teacherId = teacherId;
+      save(db);
+      return { id: classId, teacherId };
+    },
+
     async teacherWorkspace(classId) {
       const db = load();
       ownClass(db, classId);

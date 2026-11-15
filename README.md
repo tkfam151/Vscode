@@ -12,7 +12,7 @@ A coding classroom that runs on **GitHub Pages + Supabase**. No server to rent o
 - **Each class has a model workspace**: starter files the teacher writes (and can try out in their own terminal). Every student who joins the class gets their own copy. A button also gives the files to students who joined earlier; it only adds files a student doesn't have, so it never overwrites a student's work.
 - **Students** create their own account, join with the code, and get their own workspace: a VS Code-style editor, a terminal, and a web-page preview.
 - **Teachers watch any student's terminal live**, can type into it, and can **edit the student's files and press Run**. When the student isn't there, the teacher can still open the workspace, edit and run the code (it runs in the teacher's own browser).
-- **Admins can open every class and every student's workspace**, with the same abilities as the class's teacher.
+- **Admins have full access to every class**: an **All classes** page lists every class grouped by teacher, with search. Admins can open any class and do everything its teacher can (roster, live view and editing of students' workspaces, model workspace, messages, downloads, deleting). They can also create a class for any teacher and **change a class's teacher**; its students, files and messages stay with the class.
 - **Workspaces close after 1 hour without activity.** The student has to reopen it each time; their files are kept.
 
 Students can write any language (the editor colours 80+ languages, including Java, C, C++, C#, Go, Rust, Ruby and PHP). These run in the browser:

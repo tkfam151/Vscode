@@ -271,21 +271,32 @@ create policy "classcode live write" on realtime.messages for insert to authenti
 
 -- ---------------------------------------------------- functions the site calls --
 
-create or replace function public.create_class(p_name text) returns json
+-- Teachers create classes for themselves; admins may create one for any teacher.
+drop function if exists public.create_class(text);
+create or replace function public.create_class(p_name text, p_teacher uuid default null) returns json
 language plpgsql security definer set search_path = '' as $$
 declare
   v_alphabet constant text := 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
   v_code text;
   v_id uuid;
   v_name text := btrim(coalesce(p_name, ''));
+  v_teacher uuid := coalesce(p_teacher, (select auth.uid()));
 begin
   if not public.is_staff() then
     raise exception 'Only teachers can create classes';
   end if;
+  if v_teacher <> (select auth.uid()) then
+    if not public.is_admin() then
+      raise exception 'Only admins can create classes for other teachers';
+    end if;
+    if not exists (select 1 from public.profiles p where p.id = v_teacher and p.role in ('teacher', 'admin')) then
+      raise exception 'That person is not a teacher';
+    end if;
+  end if;
   if char_length(v_name) not between 1 and 80 then
     raise exception 'Class name must be 1 to 80 characters';
   end if;
-  if (select count(*) from public.classes c where c.teacher_id = (select auth.uid())) >= 100 then
+  if (select count(*) from public.classes c where c.teacher_id = v_teacher) >= 100 then
     raise exception 'Class limit reached';
   end if;
   loop
@@ -293,7 +304,7 @@ begin
       into v_code
       from (select extensions.gen_random_bytes(8) as b) r, generate_series(0, 7) i;
     begin
-      insert into public.classes (teacher_id, name, join_code) values ((select auth.uid()), v_name, v_code)
+      insert into public.classes (teacher_id, name, join_code) values (v_teacher, v_name, v_code)
       returning id into v_id;
       exit;
     exception when unique_violation then
@@ -335,7 +346,7 @@ language sql stable security definer set search_path = '' as $$
       select coalesce(json_agg(json_build_object(
                'id', c.id, 'name', c.name, 'joinCode', c.join_code,
                'studentCount', (select count(*) from public.enrollments e where e.class_id = c.id and e.kind = 'student'),
-               'teacherName', t.display_name, 'mine', c.teacher_id = (select auth.uid()))
+               'teacherName', t.display_name, 'teacherId', c.teacher_id, 'mine', c.teacher_id = (select auth.uid()))
              order by (c.teacher_id = (select auth.uid())) desc, c.created_at desc), '[]'::json)
       from public.classes c join public.profiles t on t.id = c.teacher_id
       where c.teacher_id = (select auth.uid()) or public.is_admin())
@@ -353,7 +364,8 @@ $$;
 create or replace function public.class_roster(p_class uuid) returns json
 language sql stable security definer set search_path = '' as $$
   select json_build_object(
-    'class', json_build_object('id', c.id, 'name', c.name, 'joinCode', c.join_code),
+    'class', json_build_object('id', c.id, 'name', c.name, 'joinCode', c.join_code, 'teacherId', c.teacher_id,
+                               'teacherName', (select t.display_name from public.profiles t where t.id = c.teacher_id)),
     'students', (
       select coalesce(json_agg(json_build_object(
                'workspaceId', e.id, 'studentId', s.id, 'displayName', s.display_name)
@@ -394,6 +406,23 @@ begin
     select v_ws, cf.path, cf.content from public.class_files cf where cf.class_id = p_class;
   end if;
   return v_ws;
+end $$;
+
+-- Admins: give a class to another teacher (students, files and messages stay).
+create or replace function public.admin_set_class_teacher(p_class uuid, p_teacher uuid) returns json
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change a class''s teacher';
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = p_teacher and p.role in ('teacher', 'admin')) then
+    raise exception 'That person is not a teacher';
+  end if;
+  update public.classes set teacher_id = p_teacher where id = p_class;
+  if not found then
+    raise exception 'Class not found';
+  end if;
+  return json_build_object('id', p_class, 'teacherId', p_teacher);
 end $$;
 
 -- Give the starter files to students who are already in the class. Only adds
@@ -443,7 +472,8 @@ begin
   return (
     select coalesce(json_agg(json_build_object(
              'id', p.id, 'displayName', p.display_name, 'role', p.role, 'email', u.email,
-             'status', case when coalesce(u.encrypted_password, '') = '' then 'invited' else 'active' end)
+             'status', case when coalesce(u.encrypted_password, '') = '' then 'invited' else 'active' end,
+             'classCount', (select count(*) from public.classes c where c.teacher_id = p.id))
            order by p.role, lower(p.display_name)), '[]'::json)
     from public.profiles p join auth.users u on u.id = p.id
     where p.role in ('teacher', 'admin'));
@@ -469,7 +499,9 @@ revoke all on function public.is_class_member(uuid) from public, anon;
 grant execute on function public.class_announcements(uuid, int) to authenticated;
 grant execute on function public.is_class_member(uuid) to authenticated;
 grant execute on function public.copy_starter_files(uuid) to authenticated;
-revoke all on function public.create_class(text) from public, anon;
+revoke all on function public.create_class(text, uuid) from public, anon;
+revoke all on function public.admin_set_class_teacher(uuid, uuid) from public, anon;
+grant execute on function public.admin_set_class_teacher(uuid, uuid) to authenticated;
 revoke all on function public.join_class(text) from public, anon;
 revoke all on function public.my_classes() from public, anon;
 revoke all on function public.class_roster(uuid) from public, anon;
@@ -480,7 +512,7 @@ revoke all on function public.is_admin() from public, anon;
 grant execute on function public.admin_list_staff() to authenticated;
 grant execute on function public.is_staff() to authenticated;
 grant execute on function public.is_admin() to authenticated;
-grant execute on function public.create_class(text) to authenticated;
+grant execute on function public.create_class(text, uuid) to authenticated;
 grant execute on function public.join_class(text) to authenticated;
 grant execute on function public.my_classes() to authenticated;
 grant execute on function public.class_roster(uuid) to authenticated;

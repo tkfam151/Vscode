@@ -113,8 +113,8 @@ export function create(url, anonKey) {
       return ok(await sb.rpc('my_classes')) || [];
     },
 
-    async createClass(name) {
-      return ok(await sb.rpc('create_class', { p_name: name }));
+    async createClass(name, teacherId) {
+      return ok(await sb.rpc('create_class', teacherId ? { p_name: name, p_teacher: teacherId } : { p_name: name }));
     },
 
     async deleteClass(id) {
@@ -156,6 +156,10 @@ export function create(url, anonKey) {
 
     async copyStarterToStudents(classId) {
       return ok(await sb.rpc('copy_starter_files', { p_class: classId }));
+    },
+
+    async setClassTeacher(classId, teacherId) {
+      return ok(await sb.rpc('admin_set_class_teacher', { p_class: classId, p_teacher: teacherId }));
     },
 
     async teacherWorkspace(classId) {

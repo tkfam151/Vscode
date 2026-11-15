@@ -14,7 +14,8 @@
 //   setPassword(password)                               on set-password.html; signs the user in
 //   listClasses()        teacher/admin: [{ id, name, joinCode, studentCount }]
 //                        student: [{ id, name, teacherName, workspaceId }]
-//   createClass(name) -> { id }
+//   createClass(name, teacherId?) -> { id }              admins may name another teacher
+//   setClassTeacher(classId, teacherId)                 admin only: give the class to another teacher
 //   deleteClass(id)
 //   getRoster(classId) -> { class: { id, name, joinCode }, students: [{ workspaceId, studentId, displayName }] }
 //   listStarterFiles(classId) / saveStarterFile(classId, path, content) / deleteStarterFile(classId, path)

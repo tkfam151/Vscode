@@ -83,6 +83,12 @@ main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
 .starter { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
 .starter p { margin: 0 0 4px; }
 .broadcast-card { margin-bottom: 16px; }
+.teacher-group { margin-bottom: 22px; }
+.group-title { font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
+.class-search { max-width: 280px; flex: 1 1 200px; }
+.teacher-line { margin: -4px 0 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.change-teacher { display: inline-flex; gap: 6px; align-items: center; }
+.change-teacher select { padding: 4px 8px; font-size: 14px; }
 .roster-head { margin: 8px 0 8px; }
 .roster-head h3 { margin: 0; }
 .broadcast { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }

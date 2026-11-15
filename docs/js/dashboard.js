@@ -153,7 +153,7 @@ function page(...content) {
       'header',
       { class: 'top' },
       h('a', { class: 'brand', href: '#' }, 'ClassCode'),
-      me.role === 'admin' && h('a', { class: 'navlink', href: '#' }, 'My classes'),
+      me.role === 'admin' && h('a', { class: 'navlink', href: '#' }, 'All classes'),
       me.role === 'admin' && h('a', { class: 'navlink', href: '#/admin' }, 'Manage teachers'),
       h('span', { class: 'spacer' }),
       h('span', { class: 'muted' }, `${me.displayName} · ${me.role}`),
@@ -235,26 +235,64 @@ function studentHome() {
 // --------------------------------------------------------------- teacher --
 
 function teacherHome() {
-  const list = h('div', { class: 'grid' });
+  const isAdmin = me.role === 'admin';
+  const list = h('div', {});
   const err = errorBox();
   const input = h('input', { name: 'name', placeholder: 'New class name, e.g. Period 3 Python', required: true, maxlength: 80 });
+  // admins: create a class for any teacher, and search every class
+  const teacherPick = isAdmin && h('select', { name: 'teacher', title: 'Teacher of the new class' }, h('option', { value: '' }, 'For me'));
+  const search = isAdmin && h('input', { type: 'search', placeholder: 'Search classes or teachers', class: 'class-search', autocomplete: 'off' });
+  let classes = [];
 
-  const load = async () => {
-    const classes = await backend.listClasses();
+  const card = (c) =>
+    h(
+      'a',
+      { class: 'card link', href: `#/class/${c.id}` },
+      h('h3', {}, c.name),
+      h('p', { class: 'muted' }, `${c.studentCount} student${c.studentCount === 1 ? '' : 's'}`, c.mine === false && !isAdmin ? ` · ${c.teacherName}` : ''),
+      h('p', {}, 'Join code ', h('code', { class: 'code' }, c.joinCode)),
+    );
+
+  const draw = () => {
+    const q = (search?.value || '').trim().toLowerCase();
+    const shown = q ? classes.filter((c) => c.name.toLowerCase().includes(q) || (c.teacherName || '').toLowerCase().includes(q) || c.joinCode.toLowerCase() === q) : classes;
+    if (!classes.length) return list.replaceChildren(h('p', { class: 'muted' }, 'No classes yet. Create one, then give students its join code.'));
+    if (!shown.length) return list.replaceChildren(h('p', { class: 'muted' }, 'No classes match your search.'));
+    if (!isAdmin) return list.replaceChildren(h('div', { class: 'grid' }, shown.map(card)));
+    // admins: grouped by teacher, their own classes first
+    const groups = new Map();
+    for (const c of shown) {
+      const key = c.mine ? '' : c.teacherName || 'Unknown teacher';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(c);
+    }
+    const keys = [...groups.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)));
     list.replaceChildren(
-      ...(classes.length
-        ? classes.map((c) =>
-            h(
-              'a',
-              { class: 'card link', href: `#/class/${c.id}` },
-              h('h3', {}, c.name),
-              h('p', { class: 'muted' }, `${c.studentCount} student${c.studentCount === 1 ? '' : 's'}`, c.mine === false ? ` · ${c.teacherName}` : ''),
-              h('p', {}, 'Join code ', h('code', { class: 'code' }, c.joinCode)),
-            ),
-          )
-        : [h('p', { class: 'muted' }, 'No classes yet. Create one, then give students its join code.')]),
+      ...keys.map((k) =>
+        h(
+          'section',
+          { class: 'teacher-group' },
+          h('h3', { class: 'group-title' }, k === '' ? `My classes (${groups.get(k).length})` : `${k} (${groups.get(k).length})`),
+          h('div', { class: 'grid' }, groups.get(k).map(card)),
+        ),
+      ),
     );
   };
+
+  const load = async () => {
+    classes = await backend.listClasses();
+    draw();
+  };
+  if (search) search.oninput = draw;
+
+  if (isAdmin) {
+    backend
+      .listStaff()
+      .then((staff) => {
+        for (const st of staff.filter((x) => x.id !== me.id)) teacherPick.append(h('option', { value: st.id }, `For ${st.displayName}${st.status === 'invited' ? ' (invited)' : ''}`));
+      })
+      .catch(() => {});
+  }
 
   const form = h(
     'form',
@@ -264,7 +302,7 @@ function teacherHome() {
         ev.preventDefault();
         err.hidden = true;
         try {
-          const created = await backend.createClass(input.value);
+          const created = await backend.createClass(input.value, teacherPick?.value || undefined);
           location.hash = `#/class/${created.id}`;
         } catch (e) {
           showError(err, e);
@@ -272,11 +310,18 @@ function teacherHome() {
       },
     },
     input,
+    teacherPick,
     h('button', { class: 'btn primary', type: 'submit' }, 'Create class'),
   );
 
   load().catch((e) => showError(err, e));
-  return page(h('h2', {}, 'My classes'), form, err, list);
+  return page(
+    h('div', { class: 'row spread' }, h('h2', {}, isAdmin ? 'All classes' : 'My classes'), search),
+    isAdmin && h('p', { class: 'muted' }, 'As an admin you can open and manage every class in the school.'),
+    form,
+    err,
+    list,
+  );
 }
 
 function teacherClass(classId) {
@@ -415,6 +460,37 @@ function teacherClass(classId) {
 
   const title = h('h2', {}, 'Class');
   const code = h('code', { class: 'code big' });
+  const teacherLine = h('p', { class: 'muted teacher-line' });
+  const isAdmin = me.role === 'admin';
+  const changeBox = isAdmin && h('span', { class: 'change-teacher' });
+  let staffLoaded = false;
+  const showTeacher = (cls) => {
+    teacherLine.replaceChildren(`Teacher: ${cls.teacherName || 'unknown'}${cls.teacherId === me.id ? ' (you)' : ''}`);
+    if (!isAdmin) return;
+    teacherLine.append(' · ', changeBox);
+    if (staffLoaded) return;
+    staffLoaded = true;
+    const pick = h('select', { title: 'Give this class to another teacher' });
+    const btn = h('button', { class: 'btn small', type: 'button' }, 'Change teacher');
+    changeBox.replaceChildren(pick, btn);
+    backend
+      .listStaff()
+      .then((staff) => {
+        for (const st of staff) pick.append(h('option', { value: st.id, selected: st.id === cls.teacherId }, st.displayName + (st.id === me.id ? ' (you)' : st.status === 'invited' ? ' (invited)' : '')));
+      })
+      .catch(() => (changeBox.hidden = true));
+    btn.onclick = async () => {
+      const name = pick.selectedOptions[0]?.textContent;
+      if (!pick.value || !confirm(`Give this class to ${name}? Its students, files and messages stay with the class.`)) return;
+      err.hidden = true;
+      try {
+        await backend.setClassTeacher(classId, pick.value);
+        await load();
+      } catch (e) {
+        showError(err, e);
+      }
+    };
+  };
   const body = h('tbody');
   const empty = h('p', { class: 'muted', hidden: true }, 'No students have joined yet. Share the join code above.');
   const err = errorBox();
@@ -481,6 +557,7 @@ function teacherClass(classId) {
     const data = await backend.getRoster(classId);
     title.textContent = data.class.name;
     code.textContent = data.class.joinCode;
+    showTeacher(data.class);
     students = data.students;
     if (!zipBtn.textContent.startsWith('Collecting')) zipBtn.disabled = !students.length;
     const starter = await backend.listStarterFiles(classId);
@@ -512,9 +589,22 @@ function teacherClass(classId) {
     document.title = plainTitle();
   };
 
-  load().catch((e) => showError(err, e));
-  loadMessages().catch((e) => showError(msgErr, e));
-  return page(
+  // A class that doesn't exist, or isn't this teacher's (any more), gets a clear page instead of an empty one.
+  load().catch((e) => {
+    if (!/not found/i.test(e.message)) return showError(err, e);
+    clearInterval(timer);
+    view.querySelector('main').replaceChildren(
+      h('p', {}, h('a', { href: '#' }, '← All classes')),
+      h(
+        'div',
+        { class: 'card' },
+        h('h2', {}, 'Class not found'),
+        h('p', { class: 'muted' }, "This class doesn't exist, or it isn't one of your classes. It may have been deleted, or given to another teacher by an admin."),
+      ),
+    );
+  });
+  loadMessages().catch(() => {});
+  const view = page(
     h('p', {}, h('a', { href: '#' }, '← All classes')),
     h(
       'div',
@@ -550,6 +640,7 @@ function teacherClass(classId) {
       ),
       ),
     ),
+    teacherLine,
     h('div', { class: 'card joinbox' }, h('span', {}, 'Students join with this code:'), code),
     h(
       'div',
@@ -568,6 +659,7 @@ function teacherClass(classId) {
     h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Student'), h('th', {}, 'Workspace'), h('th', {}, ''))), body),
     empty,
   );
+  return view;
 }
 
 // ----------------------------------------------------------------- admin --
@@ -609,7 +701,7 @@ function adminView() {
           'tr',
           {},
           h('td', {}, h('strong', {}, s.displayName), h('div', { class: 'muted small' }, s.email)),
-          h('td', {}, s.role === 'admin' ? 'Admin' : 'Teacher'),
+          h('td', {}, s.role === 'admin' ? 'Admin' : 'Teacher', s.classCount != null && h('div', { class: 'muted small' }, `${s.classCount} class${s.classCount === 1 ? '' : 'es'}`)),
           h('td', {}, h('span', { class: s.status === 'active' ? 'pill on' : 'pill wait' }, s.status === 'active' ? 'Active' : 'Invite sent')),
           h(
             'td',
