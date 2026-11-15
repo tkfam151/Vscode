@@ -224,6 +224,29 @@ body.resizing iframe { pointer-events: none; }
 .help td:first-child { white-space: nowrap; }
 kbd { font: 12px ui-monospace, Menlo, Consolas, monospace; background: #f3f3f3; border: 1px solid #ccc; border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; }
 
+/* narrow screens (phones) */
+.narrow-only { display: none; }
+.top { flex-wrap: wrap; row-gap: 4px; }
+#bar { overflow: hidden; }
+#run { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) {
+  .top { padding: 8px 12px; gap: 8px; }
+  .top > .muted { display: none; }
+  .top .navlink { font-size: 13px; }
+  .top .btn { padding: 6px 10px; }
+  /* wide tables scroll inside their box instead of widening the page */
+  main table { display: block; overflow-x: auto; }
+  th, td { padding: 8px 10px; }
+}
+@media (max-width: 720px) {
+  .wide-only { display: none; }
+  .narrow-only { display: inline; }
+  #bar { gap: 6px; padding: 0 8px; }
+  #bar .brand span, #teacherBadge { display: none; }
+  #bar .btn.small { padding: 5px 8px; }
+  #status { overflow-x: auto; }
+  #cursorPos, #langName { display: none; }
+}
 @media (max-width: 720px) {
   #side { width: 120px; }
   #preview { position: fixed; inset: 44px 0 0 0; width: auto; z-index: 10; }

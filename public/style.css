@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #f4f6fb;
   --card: #ffffff;
   --text: #1c2333;
@@ -12,22 +13,6 @@
   --wait-bg: #fef3c7;
   --wait-text: #92400e;
   --pill-bg: #e8ecf5;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #12151d;
-    --card: #1b202c;
-    --text: #e7eaf2;
-    --muted: #98a2b8;
-    --line: #2c3344;
-    --primary: #3b82f6;
-    --danger: #f87171;
-    --ok-bg: #14532d;
-    --ok-text: #bbf7d0;
-    --wait-bg: #713f12;
-    --wait-text: #fde68a;
-    --pill-bg: #2a3142;
-  }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }

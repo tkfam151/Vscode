@@ -129,17 +129,18 @@ Supabase       accounts, classes, saved files, and the live relay between studen
 Browser        runs the student's code
 ```
 
-- **Running code**: Python runs through [Pyodide](https://pyodide.org) (Python compiled for the browser), JavaScript runs in a browser worker, and web pages render in a sandboxed frame that cannot touch the rest of the site.
+- **Running code**: Python runs through [Pyodide](https://pyodide.org) (Python compiled for the browser); JavaScript and TypeScript run in a Node.js-like runner (`require`/`import`, npm packages, `fs`, `path`, `readline`, `process`); Lua and SQLite have their own runners. Each program runs in a background worker, so Stop (Ctrl+C) always works. Web pages render in a sealed preview frame that can't reach the rest of the site; files a page names that aren't in the workspace simply fail to load, as they would on a real web server.
 - **Live view**: the student's tab sends terminal output and file edits over a private Supabase Realtime channel. The teacher's tab shows them and sends back keystrokes, file edits and Run. Only the student, the class's teacher and admins can join a workspace's channel.
 - **Model workspace**: starter files live in their own table (`class_files`). When a student joins, the database copies them into the student's workspace in the same step. Later changes to the model don't change students' copies; use **Give to students already in the class** to add new files to everyone.
 - **Accounts**: everyone who signs up on the site is a student. The `admin-users` function invites teachers by email and gives them the teacher role; the "set password" link lands on `set-password.html`. On **Manage teachers** an admin can resend an invite, send a password-reset email to a teacher who has forgotten theirs, or remove a teacher (which also deletes that teacher's classes and the students' work in them).
 - **Idle close**: the workspace page watches for keyboard, mouse and touch input (the teacher typing also counts). After `IDLE_MINUTES` (set in `docs/config.js`, default 60) the session ends and a "Reopen workspace" button appears. Closing the tab also closes the workspace.
-- **Files** are saved to Supabase as the student types: up to 200 files per workspace, 256 KB each, text only.
+- **Files** are saved to Supabase as the student types: up to 200 files and folders per workspace, text files up to 256 KB and pictures up to about 2 MB each.
+- **Class messages** are stored in the `announcements` table and sent live over the class's channel; only that class's teacher (or an admin) can post or delete them, and only its students can read them.
 
 ## Things to know
 
 - **Use Chrome or Edge.** Python's `input()` relies on a browser feature that Firefox and Safari may not have yet. Everything else works in any modern browser.
-- **Extra Python packages** (`numpy`, `pandas`, `matplotlib`, or `pip install <name>`) are downloaded from the Pyodide CDN (`cdn.jsdelivr.net`) the first time they are imported. If your school network blocks that address, only the standard library is available. This download path could not be tested in the build environment, so try `import numpy` once before relying on it.
+- **Packages need the internet.** Python's science packages (`numpy`, `pandas`, `matplotlib`, …) load from `cdn.jsdelivr.net` the first time they're imported, `pip install` downloads from `pypi.org` and `files.pythonhosted.org`, and npm packages come from `cdn.jsdelivr.net`. If the school network blocks those addresses, only the built-in libraries work. Try `pip install cowsay` and `npm install lodash` once on your network to check.
 - **Anyone who finds the site can create a student account.** Without a join code it can't see any class, but it does use your Supabase quota.
 - **Students can't reset a forgotten password themselves yet.** An admin can send password resets to teachers from **Manage teachers**; for a student, delete their account in Supabase (**Authentication → Users**) and have them sign up again, or set a new password there.
 - **A student's code runs on the student's own device.** A slow laptop means slow programs, and Ctrl+C stops a runaway program by restarting Python.
@@ -151,9 +152,10 @@ Browser        runs the student's code
 | Path | What |
 | --- | --- |
 | `docs/` | The GitHub Pages site |
-| `docs/config.js` | Supabase details and the idle timeout |
-| `docs/js/` | Dashboard, workspace page, terminal/shell, Python worker, data layers |
-| `docs/vendor/` | Bundled libraries: Monaco editor, xterm.js, Pyodide, supabase-js |
+| `docs/config.js` | Supabase details, idle timeout, school name and logo |
+| `docs/logo.png` | The school logo |
+| `docs/js/` | Dashboard, workspace page, terminal (`shell.js`), program runners (`py-worker.js`, `node-worker.js`, `lua-worker.js`), data layers |
+| `docs/vendor/` | Bundled libraries: Monaco editor, xterm.js, Pyodide, supabase-js, marked, sql.js, Fengari (see `docs/vendor/README.md`) |
 | `supabase/schema.sql` | Tables, access rules and functions |
 | `supabase/functions/admin-users/` | Edge Function: invite, resend and remove teacher accounts |
 | `server.js`, `src/`, `public/`, `test/` | The separate server version ([SERVER.md](SERVER.md)) |

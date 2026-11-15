@@ -391,26 +391,35 @@ async function main() {
       $('previewFrame').srcdoc = `<!doctype html><body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#eef1f6"><img src="${url}" style="max-width:100%;max-height:100vh">`;
       return;
     }
+    const fileDir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
     if (/\.(md|markdown)$/i.test(path)) {
-      // Markdown: formatted in the same sandboxed frame (no access to this site).
-      const mdDoc = new DOMParser().parseFromString(marked.parse(vfs.get(path)), 'text/html');
-      inlineImages(mdDoc, path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '');
-      const html = mdDoc.body.innerHTML;
-      $('previewFrame').srcdoc =
+      // Markdown: shown formatted, like on GitHub (any <script> in it is not run).
+      const mdDoc = new DOMParser().parseFromString(
         '<!doctype html><meta charset="utf-8"><style>body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:24px auto;padding:0 20px;color:#1c2333}' +
-        'pre{background:#f4f6fb;padding:12px;border-radius:6px;overflow:auto}code{font:14px ui-monospace,Menlo,Consolas,monospace;background:#f4f6fb;padding:1px 4px;border-radius:4px}' +
-        'pre code{padding:0}table{border-collapse:collapse}td,th{border:1px solid #dde2ee;padding:4px 10px}img{max-width:100%}blockquote{border-left:4px solid #dde2ee;margin:0;padding-left:14px;color:#667089}</style>' +
-        html;
+          'pre{background:#f4f6fb;padding:12px;border-radius:6px;overflow:auto}code{font:14px ui-monospace,Menlo,Consolas,monospace;background:#f4f6fb;padding:1px 4px;border-radius:4px}' +
+          'pre code{padding:0}table{border-collapse:collapse}td,th{border:1px solid #dde2ee;padding:4px 10px}img{max-width:100%}blockquote{border-left:4px solid #dde2ee;margin:0;padding-left:14px;color:#667089}</style>' +
+          '<body>' +
+          marked.parse(vfs.get(path)),
+        'text/html',
+      );
+      for (const sc of mdDoc.querySelectorAll('script')) sc.remove();
+      finishPreview(mdDoc, fileDir);
       return;
     }
+    const doc = new DOMParser().parseFromString(vfs.get(path), 'text/html');
+    // A page with its own <base href="https://..."> loads relative files from there, not the workspace.
+    const authorBase = doc.querySelector('base[href]')?.getAttribute('href') || '';
+    if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(authorBase)) {
+      $('previewFrame').srcdoc = '<!doctype html>' + doc.documentElement.outerHTML;
+      return;
+    }
+    const dir = authorBase ? resolve(authorBase.replace(/[^/]*$/, '') + 'x', fileDir).replace(/x$/, '') : fileDir;
     // Inline the page's own CSS/JS files so it can run in a sandboxed frame with no access to this site.
-    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
     const local = (ref) => {
       if (!ref || /^([a-z]+:|\/\/|#)/i.test(ref)) return null;
       const p = (ref.startsWith('/') ? ref.slice(1) : dir + ref).split(/[?#]/)[0].replace(/^\.\//, '');
       return vfs.has(p) ? vfs.get(p) : null;
     };
-    const doc = new DOMParser().parseFromString(vfs.get(path), 'text/html');
     for (const link of doc.querySelectorAll('link[rel~="stylesheet"][href]')) {
       const css = local(link.getAttribute('href'));
       if (css !== null) {
@@ -428,9 +437,22 @@ async function main() {
         script.textContent = js;
       }
     }
+    finishPreview(doc, dir);
+  }
+
+  function finishPreview(doc, dir) {
+    for (const b of doc.querySelectorAll('base')) b.remove(); // relative addresses are handled below
     inlineImages(doc, dir);
+    isolate(doc, dir);
     $('previewFrame').srcdoc = '<!doctype html>' + doc.documentElement.outerHTML;
   }
+
+  // A link in the preview to another page of the workspace opens that page.
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== $('previewFrame').contentWindow) return;
+    const page = ev.data && ev.data.ccPage;
+    if (typeof page === 'string' && vfs.has(page)) showPreview(page);
+  });
 
   // ---- images inside the preview ----
   // The preview is a sealed frame that can't reach workspace files by URL, so
@@ -459,6 +481,34 @@ async function main() {
       const url = imageFor(ref.trim(), baseDir);
       return url ? `url("${url}")` : m;
     });
+
+  // The preview frame would otherwise resolve addresses against this website,
+  // so a page's <img src="logo.png"> could show the site's own logo and a
+  // "#top" link would reload the workspace inside the preview. Giving the page
+  // its own address (about:srcdoc) makes #links, :target and hashchange work
+  // as usual, and files that aren't in the workspace simply fail to load.
+  function isolate(doc, dir) {
+    const base = doc.createElement('base');
+    base.href = 'about:srcdoc';
+    doc.head.prepend(base);
+    // links to other workspace pages open them in the preview
+    let pageLinks = false;
+    for (const a of doc.querySelectorAll('a[href], area[href]')) {
+      const p = resolve(a.getAttribute('href'), dir);
+      if (p == null) continue;
+      if (vfs.has(p)) {
+        a.setAttribute('data-cc-page', p);
+        pageLinks = true;
+      }
+    }
+    if (pageLinks) {
+      const nav = doc.createElement('script');
+      nav.textContent =
+        "document.addEventListener('click', function (e) { if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;" +
+        " var a = e.target.closest && e.target.closest('[data-cc-page]'); if (!a) return; e.preventDefault(); parent.postMessage({ ccPage: a.getAttribute('data-cc-page') }, '*'); });";
+      doc.head.append(nav);
+    }
+  }
 
   function inlineImages(doc, dir) {
     for (const el of doc.querySelectorAll('img[src], source[src], input[type=image][src], video[poster], link[rel~=icon][href]')) {
@@ -495,16 +545,36 @@ async function main() {
       pictures[p] = url;
       total += url.length;
     }
-    if (Object.keys(pictures).length && doc.querySelector('script')) {
+    // ...and text files, so fetch('data.json') works as it would on a web server
+    const texts = {};
+    let textTotal = 0;
+    for (const [p, c] of vfs.entries()) {
+      if (isDataUrl(c) || c.length > 256 * 1024 || textTotal > 4_000_000) continue;
+      texts[p] = c;
+      textTotal += c.length;
+    }
+    if (doc.querySelector('script')) {
       const patch = doc.createElement('script');
       patch.textContent = `(() => {
-  const PICS = ${JSON.stringify(pictures).replace(/</g, '\\u003c')}, DIR = ${JSON.stringify(dir)};
-  const find = (v) => {
-    if (typeof v !== 'string' || /^([a-z][a-z0-9+.-]*:|\\/\\/)/i.test(v)) return v;
+  const PICS = ${JSON.stringify(pictures).replace(/</g, '\\u003c')}, TEXTS = ${JSON.stringify(texts).replace(/</g, '\\u003c')}, DIR = ${JSON.stringify(dir)};
+  const TYPES = { json: 'application/json', html: 'text/html', htm: 'text/html', css: 'text/css', js: 'text/javascript', csv: 'text/csv', svg: 'image/svg+xml', xml: 'application/xml', md: 'text/markdown' };
+  const rel = (v) => typeof v === 'string' && v !== '' && !/^([a-z][a-z0-9+.-]*:|\\/\\/|#)/i.test(v);
+  const pathOf = (v) => {
     const out = [];
     for (const s of (v.startsWith('/') ? v.slice(1) : DIR + v).split(/[?#]/)[0].split('/')) s === '..' ? out.pop() : s && s !== '.' && out.push(s);
-    return PICS[out.join('/')] || v;
+    try { return decodeURIComponent(out.join('/')); } catch (e) { return out.join('/'); }
   };
+  const realFetch = self.fetch.bind(self);
+  self.fetch = (input, init) => {
+    const u = typeof input === 'string' ? input : input instanceof URL ? input.href : input && input.url;
+    if (!rel(u)) return realFetch(input, init);
+    const p = pathOf(u);
+    if (p in TEXTS) return Promise.resolve(new Response(TEXTS[p], { status: 200, headers: { 'Content-Type': TYPES[p.split('.').pop().toLowerCase()] || 'text/plain' } }));
+    if (p in PICS) return realFetch(PICS[p], init);
+    return Promise.resolve(new Response('Not Found', { status: 404, statusText: 'Not Found' }));
+  };
+  // a picture from the workspace; anything else stays as written (a missing file fails to load)
+  const find = (v) => (rel(v) ? PICS[pathOf(v)] || v : v);
   for (const C of [HTMLImageElement, HTMLSourceElement]) {
     const d = Object.getOwnPropertyDescriptor(C.prototype, 'src');
     Object.defineProperty(C.prototype, 'src', { get() { return d.get.call(this); }, set(v) { d.set.call(this, find(v)); }, configurable: true });
