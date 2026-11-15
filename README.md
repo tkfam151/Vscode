@@ -38,7 +38,20 @@ export const SCHOOL_LOGO = 'logo.png';   // a file in the docs folder
 export const APP_NAME = 'ClassCode';
 ```
 
-The SISB logo is already included as `docs/logo.png`. Because the logo shows the school name, the header shows it next to just the app name ("ClassCode"); in dark mode the logo sits on a white background so the dark lettering stays readable. To replace it on GitHub: open the repository, go into the `docs` folder, choose **Add file → Upload files**, drop in the logo, name it `logo.png`, and commit to the branch your Pages site uses. Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
+The SISB logo is already included as `docs/logo.png`. Because the logo shows the school name, the header shows it next to just the app name ("ClassCode"). To replace it on GitHub: open the repository, go into the `docs` folder, choose **Add file → Upload files**, drop in the logo, name it `logo.png`, and commit to the branch your Pages site uses. Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
+
+## The workspace
+
+A light, VS Code-style layout (one light theme, whatever the computer's setting):
+
+- **Tabs** for open files; close with × or middle-click.
+- **Files and Search** panels: search every file at once, then click a result to jump to that line.
+- **Quick open** a file by typing part of its name (**Ctrl+P**).
+- **Status bar**: line and column, language, save state, **Format** (tidies JavaScript, TypeScript, HTML, CSS and JSON), word wrap, and text size **A− / A+** (editor and terminal together).
+- **Drag the dividers** to resize the file list, the terminal and the preview. Text size, wrap and panel sizes are remembered on that computer.
+- **Terminal buttons**: **Stop** a running program and **Clear** the screen.
+- **Download** the whole workspace as a `.zip` (⬇ in the file list).
+- **Keyboard shortcuts** (the ⌨ button lists them all): Ctrl+Enter run, Ctrl+S save now, Ctrl+Shift+F search, Shift+Alt+F format, Ctrl+/ comment lines, Alt+Z wrap, Ctrl+\` jump between editor and terminal, F1 every editor command.
 
 ## What this is not
 

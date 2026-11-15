@@ -22,6 +22,22 @@ import { backend, demoMode } from './backend.js';
 import { IDLE_MINUTES } from '../config.js';
 import { VFS, entryFor } from './vfs.js';
 import { isImage, isDataUrl, imageUrl, readUpload, sizeLabel } from './media.js';
+import { makeZip } from './zip.js';
+
+// Per-person settings for this browser (text size, word wrap, panel sizes).
+const PREFS_KEY = 'classcode_prefs';
+const prefs = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(PREFS_KEY)) || {};
+  } catch {
+    return {};
+  }
+})();
+const savePrefs = () => {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch {}
+};
 import { Session, commandFor } from './shell.js';
 import { applyBrand } from './brand.js';
 
@@ -94,16 +110,22 @@ async function main() {
     require.config({ paths: { vs: 'vendor/monaco/vs' } });
     require(['vs/editor/editor.main'], resolve);
   });
-  const dark = matchMedia('(prefers-color-scheme: dark)');
   const editor = monaco.editor.create($('editor'), {
     model: null,
-    theme: dark.matches ? 'vs-dark' : 'vs',
+    theme: 'vs',
     automaticLayout: true,
     minimap: { enabled: false },
-    fontSize: 14,
+    fontSize: prefs.fontSize || 14,
+    wordWrap: prefs.wrap ? 'on' : 'off',
     scrollBeyondLastLine: false,
+    bracketPairColorization: { enabled: true },
+    guides: { bracketPairs: true, indentation: true },
+    stickyScroll: { enabled: true },
+    renderWhitespace: 'selection',
+    tabSize: 4,
+    insertSpaces: true,
+    smoothScrolling: true,
   });
-  dark.addEventListener('change', () => monaco.editor.setTheme(dark.matches ? 'vs-dark' : 'vs'));
 
   const models = new Map();
   let active = null;
@@ -119,6 +141,49 @@ async function main() {
     }
     return m;
   };
+
+  // ---- editor tabs ----
+  const openTabs = [];
+  function renderTabs() {
+    for (let i = openTabs.length - 1; i >= 0; i--) if (!vfs.has(openTabs[i])) openTabs.splice(i, 1);
+    $('tabs').replaceChildren(
+      ...openTabs.map((p) => {
+        const tab = document.createElement('div');
+        tab.className = 'tab' + (p === active ? ' active' : '');
+        tab.setAttribute('role', 'tab');
+        tab.title = p;
+        const name = document.createElement('span');
+        name.textContent = p.split('/').pop();
+        // show the folder when two open files share a name
+        if (openTabs.filter((q) => q.split('/').pop() === name.textContent).length > 1 && p.includes('/')) {
+          const dir = document.createElement('span');
+          dir.className = 'dir';
+          dir.textContent = p.slice(0, p.lastIndexOf('/'));
+          name.append(' ', dir);
+        }
+        const x = document.createElement('button');
+        x.className = 'x';
+        x.title = 'Close (Ctrl+W)';
+        x.textContent = '×';
+        x.onclick = (ev) => {
+          ev.stopPropagation();
+          closeTab(p);
+        };
+        tab.append(name, x);
+        tab.onclick = () => p !== active && openFile(p);
+        tab.onauxclick = (ev) => ev.button === 1 && closeTab(p);
+        if (p === active) requestAnimationFrame(() => tab.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+        return tab;
+      }),
+    );
+  }
+  function closeTab(path) {
+    const i = openTabs.indexOf(path);
+    if (i < 0) return;
+    openTabs.splice(i, 1);
+    if (path === active) openFile(openTabs[Math.min(i, openTabs.length - 1)] ?? null);
+    else renderTabs();
+  }
 
   // What Run, rename and delete act on: the open file, or a folder clicked in the tree.
   let selected = null; // { path, dir }
@@ -139,10 +204,13 @@ async function main() {
     for (let i = path ? path.indexOf('/') : -1; i > 0; i = path.indexOf('/', i + 1)) collapsed.delete(path.slice(0, i));
     const picture = path && isDataUrl(vfs.get(path));
     editor.setModel(path && !picture ? modelFor(path) : null);
-    $('editor').hidden = !!picture;
+    $('editor').hidden = !!picture || !path;
     $('imageView').hidden = !picture;
+    $('emptyState').hidden = !!path;
     if (picture) showImage(path);
-    $('filename').textContent = path || 'No file open';
+    if (path && !openTabs.includes(path)) openTabs.push(path);
+    renderTabs();
+    updateStatus();
     renderFiles();
     if (announce && !isTeacher) channel.send('active', { path });
     if (!$('preview').hidden && path && /\.(html?|md|markdown)$/i.test(path)) showPreview(path);
@@ -206,7 +274,10 @@ async function main() {
   const saveTimers = new Map();
   const sendTimers = new Map();
   let pendingSaves = 0;
-  const showSaved = () => ($('saved').textContent = pendingSaves ? 'Saving…' : 'Saved');
+  const showSaved = () => {
+    $('saved').className = '';
+    $('saved').textContent = pendingSaves ? 'Saving…' : '✓ All changes saved';
+  };
 
   // Apply someone else's version of a file while keeping this person's cursor:
   // replace only the changed middle part instead of the whole text.
@@ -228,8 +299,19 @@ async function main() {
     applyingRemote = false;
   }
   const later = (timers, key, ms, fn) => {
-    clearTimeout(timers.get(key));
-    timers.set(key, setTimeout(() => (timers.delete(key), fn()), ms));
+    clearTimeout(timers.get(key)?.id);
+    const entry = { fn, id: setTimeout(() => (timers.delete(key), fn()), ms) };
+    timers.set(key, entry);
+  };
+  // Ctrl+S: send and save everything waiting, right now.
+  const flushAll = () => {
+    for (const timers of [sendTimers, saveTimers]) {
+      for (const [key, entry] of [...timers]) {
+        clearTimeout(entry.id);
+        timers.delete(key);
+        entry.fn();
+      }
+    }
   };
 
   vfs.onChange((path, content, source) => {
@@ -242,9 +324,10 @@ async function main() {
     } else if (model && source !== 'editor' && model.getValue() !== content) {
       applyRemote(model, content);
     }
-    if (content !== null && path === active && (isDataUrl(content) !== $('editor').hidden)) openFile(path, { announce: false });
+    if (content !== null && path === active && isDataUrl(content) === $('imageView').hidden) openFile(path, { announce: false });
     else if (content !== null && path === active && isDataUrl(content)) showImage(path);
     renderFiles();
+    if (content === null && openTabs.includes(path)) renderTabs();
     if (!$('preview').hidden) later(sendTimers, '\0preview', 400, () => showPreview(previewPath));
     // Changes that came from the other person are already saved and shared by them.
     if (source === 'remote') return;
@@ -267,6 +350,7 @@ async function main() {
         if (exists && (vfs.get(path) ?? '').length > BIG_FILE) channel.send('refetch', { path });
       } catch (e) {
         $('saved').textContent = `Not saved: ${e.message}`;
+        $('saved').className = 'error';
         pendingSaves--;
         return;
       }
@@ -423,11 +507,33 @@ async function main() {
 
   // ------------------------------------------------------------- terminal --
   const term = new Terminal({
-    fontSize: 14,
+    fontSize: prefs.fontSize || 14,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
     cursorBlink: true,
     scrollback: 5000,
-    theme: { background: '#11141c' },
+    // light terminal, colours like VS Code's light theme
+    theme: {
+      background: '#ffffff',
+      foreground: '#1f2328',
+      cursor: '#1f2328',
+      selectionBackground: '#add6ff',
+      black: '#1f2328',
+      red: '#cd3131',
+      green: '#107c10',
+      yellow: '#949800',
+      blue: '#0451a5',
+      magenta: '#bc05bc',
+      cyan: '#0598bc',
+      white: '#555555',
+      brightBlack: '#6e7781',
+      brightRed: '#cd3131',
+      brightGreen: '#14ce14',
+      brightYellow: '#b5ba00',
+      brightBlue: '#0451a5',
+      brightMagenta: '#bc05bc',
+      brightCyan: '#0598bc',
+      brightWhite: '#a5a5a5',
+    },
   });
   const fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
@@ -480,6 +586,7 @@ async function main() {
     return js.text;
   }
   const runTarget = () => (selected ? { path: selected.path, dir: selected.dir } : { path: active, dir: false });
+  setupWorkbench();
   const runActive = (session) => {
     const t = runTarget();
     runPath(session, t.path, t.dir);
@@ -548,6 +655,336 @@ async function main() {
       renderFiles();
     } else if (active && confirm(`Delete ${active}?`)) vfs.delete(active);
   };
+
+  // ------------------------------------------------------------ workbench --
+  // Status bar, text size, word wrap, format, resizable panels, search,
+  // quick open, keyboard shortcuts, terminal buttons, download as .zip.
+  function setupWorkbench() {
+    // text size: editor and terminal together
+    const setFont = (size) => {
+      size = Math.max(10, Math.min(28, size));
+      prefs.fontSize = size;
+      savePrefs();
+      editor.updateOptions({ fontSize: size });
+      term.options.fontSize = size;
+      $('fontSize').textContent = size + 'px';
+      fit();
+    };
+    $('fontSize').textContent = (prefs.fontSize || 14) + 'px';
+    $('fontUp').onclick = () => setFont((prefs.fontSize || 14) + 1);
+    $('fontDown').onclick = () => setFont((prefs.fontSize || 14) - 1);
+
+    const setWrap = (on) => {
+      prefs.wrap = on;
+      savePrefs();
+      editor.updateOptions({ wordWrap: on ? 'on' : 'off' });
+      $('wrapBtn').textContent = `Wrap: ${on ? 'on' : 'off'}`;
+    };
+    setWrap(!!prefs.wrap);
+    $('wrapBtn').onclick = () => setWrap(!prefs.wrap);
+    editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyZ, () => setWrap(!prefs.wrap));
+
+    $('formatBtn').onclick = async () => {
+      const action = editor.getModel() && editor.getAction('editor.action.formatDocument');
+      if (!action?.isSupported()) {
+        $('saved').textContent = 'Format works for JavaScript, TypeScript, HTML, CSS and JSON';
+        return;
+      }
+      await action.run();
+      editor.focus();
+    };
+
+    editor.onDidChangeCursorPosition(updateStatus);
+    editor.onDidChangeModel(updateStatus);
+
+    // terminal buttons work in every mode: they act like pressing the keys
+    $('termStop').onclick = () => {
+      term.input('\x03');
+      term.focus();
+    };
+    $('termClear').onclick = () => {
+      term.clear();
+      term.focus();
+    };
+
+    // ---- resizable panels ----
+    const root = document.documentElement.style;
+    const sizes = prefs.sizes || {};
+    const applySizes = () => {
+      if (sizes.side) root.setProperty('--side-w', sizes.side + 'px');
+      if (sizes.terminal) root.setProperty('--term-h', sizes.terminal + 'px');
+      if (sizes.preview) root.setProperty('--preview-w', sizes.preview + 'px');
+    };
+    applySizes();
+    for (const g of document.querySelectorAll('[data-resize]')) {
+      g.addEventListener('pointerdown', (down) => {
+        down.preventDefault();
+        const which = g.dataset.resize;
+        const start = { x: down.clientX, y: down.clientY };
+        const from = {
+          side: $('side').offsetWidth,
+          terminal: $('terminal').offsetHeight,
+          preview: $('preview').offsetWidth,
+        }[which];
+        g.classList.add('dragging');
+        document.body.classList.add('resizing');
+        g.setPointerCapture(down.pointerId);
+        const move = (ev) => {
+          const dx = ev.clientX - start.x;
+          const dy = ev.clientY - start.y;
+          if (which === 'side') sizes.side = Math.max(120, Math.min(innerWidth * 0.5, from + dx));
+          if (which === 'terminal') sizes.terminal = Math.max(60, Math.min(innerHeight - 200, from - dy));
+          if (which === 'preview') sizes.preview = Math.max(200, Math.min(innerWidth * 0.75, from - dx));
+          applySizes();
+          fit();
+        };
+        const up = () => {
+          g.classList.remove('dragging');
+          document.body.classList.remove('resizing');
+          g.removeEventListener('pointermove', move);
+          prefs.sizes = sizes;
+          savePrefs();
+        };
+        g.addEventListener('pointermove', move);
+        g.addEventListener('pointerup', up, { once: true });
+      });
+    }
+    // the preview's handle shows with the preview
+    new MutationObserver(() => ($('previewGutter').hidden = $('preview').hidden)).observe($('preview'), { attributes: true, attributeFilter: ['hidden'] });
+
+    // ---- sidebar: files / search ----
+    const showView = (view) => {
+      $('filesView').hidden = view !== 'files';
+      $('searchView').hidden = view !== 'search';
+      $('viewFiles').classList.toggle('active', view === 'files');
+      $('viewSearch').classList.toggle('active', view === 'search');
+      if (view === 'search') {
+        $('searchInput').focus();
+        $('searchInput').select();
+        runSearch();
+      }
+    };
+    $('viewFiles').onclick = () => showView('files');
+    $('viewSearch').onclick = () => showView('search');
+
+    let searchTimer = null;
+    function runSearch() {
+      const q = $('searchInput').value;
+      const matchCase = $('searchCase').checked;
+      const list = $('searchResults');
+      if (!q) {
+        list.replaceChildren();
+        $('searchSummary').textContent = 'Type to search every file in this workspace.';
+        return;
+      }
+      const needle = matchCase ? q : q.toLowerCase();
+      let hits = 0;
+      let files = 0;
+      const rows = [];
+      for (const path of vfs.paths()) {
+        const text = vfs.get(path);
+        if (isDataUrl(text)) continue;
+        const lines = text.split('\n');
+        const found = [];
+        lines.forEach((line, i) => {
+          const at = (matchCase ? line : line.toLowerCase()).indexOf(needle);
+          if (at >= 0 && hits < 500) found.push({ line, n: i + 1, at }), hits++;
+        });
+        if (!found.length) continue;
+        files++;
+        const head = document.createElement('li');
+        head.className = 'file';
+        head.textContent = `${path} (${found.length})`;
+        rows.push(head);
+        for (const f of found) {
+          const li = document.createElement('li');
+          li.className = 'hit';
+          const ln = document.createElement('span');
+          ln.className = 'ln';
+          ln.textContent = f.n;
+          const startAt = Math.max(0, f.at - 20);
+          const mark = document.createElement('mark');
+          mark.textContent = f.line.slice(f.at, f.at + q.length);
+          li.append(ln, (startAt ? '…' : '') + f.line.slice(startAt, f.at).trimStart(), mark, f.line.slice(f.at + q.length, f.at + q.length + 80));
+          li.title = `${path}:${f.n}`;
+          li.onclick = () => {
+            if (isTeacher) $('follow').checked = false;
+            openFile(path);
+            editor.setSelection(new monaco.Range(f.n, f.at + 1, f.n, f.at + 1 + q.length));
+            editor.revealLineInCenter(f.n);
+            editor.focus();
+          };
+          rows.push(li);
+        }
+      }
+      list.replaceChildren(...rows);
+      $('searchSummary').textContent = hits ? `${hits}${hits >= 500 ? '+' : ''} result${hits === 1 ? '' : 's'} in ${files} file${files === 1 ? '' : 's'}` : 'No results.';
+    }
+    $('searchInput').oninput = () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(runSearch, 150);
+    };
+    $('searchCase').onchange = runSearch;
+    vfs.onChange(() => {
+      if (!$('searchView').hidden && $('searchInput').value) {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(runSearch, 500);
+      }
+    });
+
+    // ---- quick open (Ctrl+P) ----
+    let picks = [];
+    let pick = 0;
+    const score = (path, q) => {
+      // every typed letter must appear in order; earlier and in the file name scores higher
+      const p = path.toLowerCase();
+      let i = 0;
+      let s = 0;
+      for (const ch of q.toLowerCase()) {
+        const j = p.indexOf(ch, i);
+        if (j < 0) return -1;
+        s += j - i;
+        i = j + 1;
+      }
+      return s + (p.split('/').pop().includes(q.toLowerCase()) ? 0 : 50) + path.length / 100;
+    };
+    const drawPalette = () => {
+      const q = $('paletteInput').value.trim();
+      picks = vfs
+        .paths()
+        .map((p) => [p, q ? score(p, q) : 0])
+        .filter(([, sc]) => sc >= 0)
+        .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+        .slice(0, 50)
+        .map(([p]) => p);
+      pick = Math.min(pick, Math.max(0, picks.length - 1));
+      $('paletteList').replaceChildren(
+        ...(picks.length
+          ? picks.map((p, i) => {
+              const li = document.createElement('li');
+              li.className = i === pick ? 'on' : '';
+              const name = document.createElement('span');
+              name.textContent = p.split('/').pop();
+              const dir = document.createElement('span');
+              dir.className = 'dir';
+              dir.textContent = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+              li.append(name, dir);
+              li.onmousedown = (ev) => {
+                ev.preventDefault();
+                choose(p);
+              };
+              return li;
+            })
+          : [Object.assign(document.createElement('li'), { className: 'none', textContent: 'No matching files' })]),
+      );
+      $('paletteList').children[pick]?.scrollIntoView({ block: 'nearest' });
+    };
+    const closePalette = () => {
+      $('palette').hidden = true;
+      editor.focus();
+    };
+    const choose = (p) => {
+      $('palette').hidden = true;
+      if (isTeacher) $('follow').checked = false;
+      openFile(p);
+      editor.focus();
+    };
+    const openPalette = () => {
+      $('palette').hidden = false;
+      $('paletteInput').value = '';
+      pick = 0;
+      drawPalette();
+      $('paletteInput').focus();
+    };
+    $('paletteInput').oninput = () => {
+      pick = 0;
+      drawPalette();
+    };
+    $('paletteInput').onkeydown = (ev) => {
+      if (ev.key === 'ArrowDown') pick = Math.min(pick + 1, picks.length - 1);
+      else if (ev.key === 'ArrowUp') pick = Math.max(pick - 1, 0);
+      else if (ev.key === 'Enter') return picks[pick] && choose(picks[pick]);
+      else if (ev.key === 'Escape') return closePalette();
+      else return;
+      ev.preventDefault();
+      drawPalette();
+    };
+    $('palette').onmousedown = (ev) => ev.target === $('palette') && closePalette();
+
+    // ---- shortcuts help ----
+    $('helpBtn').onclick = () => ($('help').hidden = false);
+    $('helpClose').onclick = () => ($('help').hidden = true);
+    $('help').onmousedown = (ev) => ev.target === $('help') && ($('help').hidden = true);
+
+    // ---- download the workspace as a .zip ----
+    $('downloadZip').onclick = () => {
+      const enc = new TextEncoder();
+      const entries = [];
+      for (const d of vfs.allDirs()) entries.push({ name: d + '/', data: new Uint8Array() });
+      for (const [path, content] of vfs.entries()) {
+        let data;
+        if (isDataUrl(content)) {
+          const bin = atob(content.slice(content.indexOf(',') + 1));
+          data = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+        } else data = enc.encode(content);
+        entries.push({ name: path, data });
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(makeZip(entries));
+      a.download = `${info.className}-${info.studentName}`.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') + '.zip';
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    };
+
+    // ---- keyboard shortcuts (before the browser's own: Ctrl+S, Ctrl+P, ...) ----
+    window.addEventListener(
+      'keydown',
+      (ev) => {
+        const mod = ev.ctrlKey || ev.metaKey;
+        if (!mod && !(ev.altKey && ev.key.toLowerCase() === 'w')) {
+          if (ev.key === 'Escape' && !$('help').hidden) $('help').hidden = true;
+          return;
+        }
+        const k = ev.key.toLowerCase();
+        let handled = true;
+        if (k === 's' && !ev.shiftKey) {
+          flushAll();
+          showSaved();
+        } else if (k === 'p' && !ev.shiftKey) openPalette();
+        else if (k === 'f' && ev.shiftKey) showView('search');
+        else if (k === 'e' && ev.shiftKey) showView('files');
+        else if (k === '`' || ev.code === 'Backquote') {
+          if (document.activeElement?.closest('#terminal')) editor.focus();
+          else term.focus();
+        } else if ((k === 'w' && mod && !ev.shiftKey) || (k === 'w' && ev.altKey)) {
+          if (active) closeTab(active);
+        } else if (k === '=' || k === '+') setFont((prefs.fontSize || 14) + 1);
+        else if (k === '-') setFont((prefs.fontSize || 14) - 1);
+        else handled = false;
+        if (handled) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+      },
+      { capture: true },
+    );
+  }
+
+  function updateStatus() {
+    const model = editor.getModel();
+    if (!model || $('editor').hidden) {
+      $('cursorPos').textContent = '';
+      $('langName').textContent = active && isImage(active) ? 'Picture' : '';
+      return;
+    }
+    const pos = editor.getPosition();
+    $('cursorPos').textContent = pos ? `Ln ${pos.lineNumber}, Col ${pos.column}` : '';
+    const id = model.getLanguageId();
+    const lang = monaco.languages.getLanguages().find((l) => l.id === id);
+    $('langName').textContent = id === 'plaintext' ? 'Plain text' : lang?.aliases?.[0] || id;
+  }
 
   // Upload images and files: button, or drag them onto the file list.
   async function addUploads(fileList) {

@@ -21,31 +21,96 @@
 </header>
 <div id="main">
   <aside id="side">
+    <div class="side-tabs" role="tablist">
+      <button id="viewFiles" class="side-tab active" role="tab" title="Files (Ctrl+Shift+E)">Files</button>
+      <button id="viewSearch" class="side-tab" role="tab" title="Search in all files (Ctrl+Shift+F)">Search</button>
+    </div>
+    <div id="filesView" class="side-view">
     <div class="side-head">
-      <span>Files</span>
+      <span></span>
       <span class="side-actions">
         <button id="newFile" class="icon" title="New file">＋</button>
         <button id="newFolder" class="icon" title="New folder">📁</button>
         <button id="upload" class="icon" title="Upload images or files (or drag them here)">⬆</button>
         <button id="renameFile" class="icon" title="Rename the selected file or folder">✎</button>
         <button id="deleteFile" class="icon" title="Delete the selected file or folder">🗑</button>
+        <button id="downloadZip" class="icon" title="Download the whole workspace as a .zip">⬇</button>
       </span>
     </div>
     <ul id="files"></ul>
     <input id="uploadInput" type="file" multiple hidden>
+    </div>
+    <div id="searchView" class="side-view" hidden>
+      <div class="search-box">
+        <input id="searchInput" type="search" placeholder="Search all files" autocomplete="off" spellcheck="false">
+        <label class="small"><input type="checkbox" id="searchCase"> Match case</label>
+      </div>
+      <p id="searchSummary" class="muted small"></p>
+      <ul id="searchResults"></ul>
+    </div>
     <label id="followWrap" class="follow" hidden><input type="checkbox" id="follow" checked> Follow student</label>
   </aside>
+  <div class="gutter-v" data-resize="side" title="Drag to resize"></div>
   <section id="work">
-    <div id="tabbar"><span id="filename"></span><span id="saved" class="muted small"></span></div>
+    <div id="tabbar"><div id="tabs" role="tablist"></div></div>
     <div id="editor"></div>
+    <div id="emptyState" hidden>
+      <p><strong>No file open</strong></p>
+      <p class="muted">Pick a file on the left, or press <kbd>Ctrl</kbd>+<kbd>P</kbd> to open one by name.</p>
+      <p class="muted">Make a new one with <strong>＋</strong>, or upload pictures with <strong>⬆</strong>.</p>
+    </div>
     <div id="imageView" hidden><img id="imageImg" alt=""><p id="imageInfo" class="muted small"></p></div>
-    <div id="termhead"><span>Terminal</span><span id="termnote" class="muted small"></span></div>
+    <div class="gutter-h" data-resize="terminal" title="Drag to resize"></div>
+    <div id="termhead">
+      <span>Terminal</span><span id="termnote" class="muted small"></span>
+      <span class="spacer"></span>
+      <button id="termStop" class="icon" title="Stop the running program (Ctrl+C)">■ Stop</button>
+      <button id="termClear" class="icon" title="Clear the terminal">⌫ Clear</button>
+    </div>
     <div id="terminal"></div>
   </section>
+  <div class="gutter-v" data-resize="preview" id="previewGutter" hidden title="Drag to resize"></div>
   <section id="preview" hidden>
     <div class="side-head"><span id="previewName">Preview</span><button id="previewClose" class="icon" title="Close preview">✕</button></div>
     <iframe id="previewFrame" title="Web page preview" sandbox="allow-scripts allow-modals allow-forms"></iframe>
   </section>
+</div>
+<footer id="status">
+  <span id="saved"></span>
+  <span class="spacer"></span>
+  <span id="cursorPos"></span>
+  <span id="langName"></span>
+  <button id="formatBtn" class="stat" title="Tidy up the code's layout (Shift+Alt+F)">Format</button>
+  <button id="wrapBtn" class="stat" title="Wrap long lines (Alt+Z)">Wrap: off</button>
+  <span class="zoom"><button id="fontDown" class="stat" title="Smaller text (Ctrl+-)">A−</button><span id="fontSize"></span><button id="fontUp" class="stat" title="Bigger text (Ctrl+=)">A+</button></span>
+  <button id="helpBtn" class="stat" title="Keyboard shortcuts">⌨ Shortcuts</button>
+</footer>
+<div id="palette" class="overlay light" hidden>
+  <div class="palette">
+    <input id="paletteInput" placeholder="Type a file name to open it" autocomplete="off" spellcheck="false">
+    <ul id="paletteList"></ul>
+  </div>
+</div>
+<div id="help" class="overlay light" hidden>
+  <div class="card help">
+    <h2>Keyboard shortcuts</h2>
+    <table>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Run the selected file or folder</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save now (files also save by themselves)</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>P</kbd></td><td>Open a file by name</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd></td><td>Search in all files</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd> / <kbd>Ctrl</kbd>+<kbd>H</kbd></td><td>Find / replace in this file</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd></td><td>Format the code</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>/</kbd></td><td>Comment or uncomment lines</td></tr>
+      <tr><td><kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move lines up or down</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>D</kbd></td><td>Select the next match (edit several at once)</td></tr>
+      <tr><td><kbd>Alt</kbd>+<kbd>Z</kbd></td><td>Wrap long lines on or off</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>`</kbd></td><td>Jump between the editor and the terminal</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>W</kbd> (Alt+W in some browsers)</td><td>Close the current tab</td></tr>
+      <tr><td><kbd>F1</kbd></td><td>All editor commands</td></tr>
+    </table>
+    <p><button id="helpClose" class="btn primary">Close</button></p>
+  </div>
 </div>
 <div id="overlay" class="overlay" hidden>
   <div class="card launch">
