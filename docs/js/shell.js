@@ -18,6 +18,9 @@ const HELP = `\x1b[1mRunning code\x1b[0m
 \x1b[1mPackages\x1b[0m
   pip install NAME     pip install -r requirements.txt     pip list | uninstall | freeze | show
   npm init             npm install NAME      npm uninstall NAME     npm list    npm run SCRIPT   npm start
+\x1b[1mInternet\x1b[0m
+  curl URL             curl -o FILE URL      curl -X POST -H "Content-Type: application/json" -d '{"a":1}' URL
+  curl -i / -I URL     wget URL              (works with sites that allow web pages to read them, e.g. APIs)
 \x1b[1mFiles\x1b[0m
   ls [-la]  cd  pwd  cat  head  tail  wc  grep  find  tree  mkdir [-p]  touch  cp [-r]  mv  rm [-r]  rmdir
 \x1b[1mShell\x1b[0m
@@ -43,7 +46,7 @@ const EDIT_ONLY = {
 };
 // Real-computer tools that can't exist in a browser tab.
 const NEEDS_COMPUTER = {
-  git: 'Git', brew: 'Homebrew', apt: 'apt', 'apt-get': 'apt', sudo: 'sudo', curl: 'curl', wget: 'wget', ssh: 'ssh',
+  git: 'Git', brew: 'Homebrew', apt: 'apt', 'apt-get': 'apt', sudo: 'sudo', ssh: 'ssh',
   java: 'Java', javac: 'Java', gcc: 'a C compiler', 'g++': 'a C++ compiler', clang: 'a C compiler', make: 'make',
   go: 'Go', cargo: 'Rust', rustc: 'Rust', ruby: 'Ruby', php: 'PHP', dotnet: '.NET', docker: 'Docker', yarn: 'yarn', pnpm: 'pnpm',
   vim: 'vim', nano: 'nano', emacs: 'emacs', top: 'top', ps: 'ps', kill: 'kill', chmod: 'chmod', ping: 'ping',
@@ -236,7 +239,15 @@ export class Session {
    * @param {string} [o.host]
    */
   constructor({ write, vfs, onPreview, onOpen, compileTs, user = 'student', host = 'classcode' }) {
-    this.write = write;
+    // remember whether the cursor is at the start of a line (for zsh's missing-newline mark)
+    this.atLineStart = true;
+    this.write = (d) => {
+      if (!d) return;
+      const plain = d.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+      if (plain) this.atLineStart = /[\r\n]$/.test(plain);
+      if (/\x1b\[H$/.test(d)) this.atLineStart = true;
+      write(d);
+    };
     this.vfs = vfs;
     this.onPreview = onPreview;
     this.onOpen = onOpen;
@@ -273,6 +284,8 @@ export class Session {
     this.line = '';
     this.histPos = this.history.length;
     if (this.disposed) return;
+    // like zsh: output that didn't end with a newline gets a highlighted % and a line break
+    if (!this.atLineStart) this.write('\x1b[7m%\x1b[0m\r\n');
     this.write(`\x1b[1;32m${this.user}@${this.host}\x1b[0m \x1b[1;34m${this.dirLabel}\x1b[0m % `);
   }
 
@@ -528,7 +541,6 @@ export class Session {
       if (NEEDS_COMPUTER[cmd]) {
         this.print(
           `zsh: ${cmd}: not available here. This terminal runs inside your web browser, so it can't install or run ${NEEDS_COMPUTER[cmd]}.` +
-            (cmd === 'curl' || cmd === 'wget' ? ' Use fetch() in JavaScript or urllib in Python instead.' : '') +
             (cmd === 'sudo' || cmd === 'apt' || cmd === 'apt-get' || cmd === 'brew' ? ' Use pip install or npm install for packages.' : '') +
             '\n',
         );
@@ -1033,7 +1045,7 @@ const builtins = {
       else rest.push(a);
     }
     const [pattern, ...targets] = rest;
-    if (pattern == null) fail('usage: grep [-i -n -v -c -r -l] PATTERN [FILE ...]', 2);
+    if (pattern == null) fail('usage: grep [-i -n -v -c -o -r -l] PATTERN [FILE ...]', 2);
     let re;
     try {
       re = new RegExp(flags.has('F') ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : pattern, flags.has('i') ? 'i' : '');
@@ -1062,8 +1074,14 @@ const builtins = {
         count++;
         matched++;
         if (flags.has('c') || flags.has('l')) return;
+        const prefix = (showName && name ? `\x1b[35m${name}\x1b[0m:` : '') + (flags.has('n') ? `\x1b[32m${i + 1}\x1b[0m:` : '');
+        if (flags.has('o') && !flags.has('v')) {
+          // only the matching parts, one per line
+          for (const m of line.matchAll(new RegExp(re.source, re.flags + 'g'))) if (m[0]) this.print(prefix + `\x1b[1;31m${m[0]}\x1b[0m\n`);
+          return;
+        }
         const shown = flags.has('v') ? line : line.replace(new RegExp(re.source, re.flags + 'g'), (m) => `\x1b[1;31m${m}\x1b[0m`);
-        this.print((showName && name ? `\x1b[35m${name}\x1b[0m:` : '') + (flags.has('n') ? `\x1b[32m${i + 1}\x1b[0m:` : '') + shown + '\n');
+        this.print(prefix + shown + '\n');
       });
       if (flags.has('c')) this.print((showName && name ? name + ':' : '') + count + '\n');
       if (flags.has('l') && count) this.print(name + '\n');
@@ -1332,6 +1350,20 @@ const builtins = {
   async npm(args, stdin) {
     return npm.call(this, args, stdin);
   },
+  async curl(args) {
+    return curl.call(this, args);
+  },
+  async wget(args) {
+    const quiet = args.includes('-q');
+    const oAt = args.indexOf('-O');
+    const url = args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-O');
+    if (!url) fail('missing URL\nUsage: wget [-q] [-O FILE] URL');
+    const name = oAt >= 0 ? args[oAt + 1] : decodeURIComponent(new URL(withScheme(url)).pathname.split('/').pop() || '') || 'index.html';
+    if (!quiet) this.print(`--${new Date().toISOString().replace('T', ' ').slice(0, 19)}--  ${withScheme(url)}\n`);
+    const status = await curl.call(this, ['-s', '-f', '-L', '-o', name, url], { wget: true, quiet });
+    if (!status && !quiet) this.print(`\nSaving to: ‘${name}’\n\n‘${name}’ saved\n`);
+    return status ? (status === 22 ? 8 : 4) : 0;
+  },
   npx(args) {
     fail(`npx can't download and run tools here. Install a package with "npm install ${args[0] || 'NAME'}" and use it from your own code.`, 127);
   },
@@ -1441,6 +1473,173 @@ function headTail(which, args, stdin) {
   const lines = this.inputText(files, stdin, which).replace(/\n$/, '').split('\n');
   const picked = which === 'head' ? lines.slice(0, n) : lines.slice(Math.max(0, lines.length - n));
   this.print(picked.join('\n') + '\n');
+}
+
+// --------------------------------------------------------------------- curl --
+// Real HTTP requests with the browser's fetch(). A site only answers a web page
+// when it allows it (CORS), which most public APIs do.
+const withScheme = (u) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : 'https://' + u);
+const TEXT_TYPE = /^(text\/|application\/(json|.*\+json|xml|.*\+xml|javascript|x-www-form-urlencoded|ld\+json|graphql)|image\/svg)/i;
+
+async function curl(args, opts = {}) {
+  const o = { method: null, headers: {}, data: null, out: null, remoteName: false, include: false, head: false, silent: false, fail: false, verbose: false, user: null, writeOut: null };
+  const urls = [];
+  if (args.includes('--help') || args.includes('-h')) {
+    this.print('Usage: curl [options...] <url>\n -d, --data <data>   send data (POST)\n -H, --header <h>    add a header\n -i, --include       show response headers\n -I, --head          headers only\n -o, --output <file> save to a file\n -O                  save using the URL\'s file name\n -s, --silent        no progress or errors\n -X, --request <m>   method (GET, POST, PUT, DELETE...)\n --json <data>       send JSON\n');
+    return 0;
+  }
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const next = () => {
+      if (i + 1 >= args.length) fail(`(2) option ${a}: requires parameter`, 2);
+      return args[++i];
+    };
+    if (a === '-X' || a === '--request') o.method = next().toUpperCase();
+    else if (a === '-H' || a === '--header') {
+      const h = next();
+      const c = h.indexOf(':');
+      if (c > 0) o.headers[h.slice(0, c).trim()] = h.slice(c + 1).trim();
+    } else if (['-d', '--data', '--data-raw', '--data-binary', '--data-urlencode'].includes(a)) {
+      let d = next();
+      if (d.startsWith('@') && a !== '--data-raw') d = this.readText(d.slice(1));
+      o.data = o.data == null ? d : o.data + '&' + d;
+    } else if (a === '--json') {
+      let d = next();
+      if (d.startsWith('@')) d = this.readText(d.slice(1));
+      o.data = d;
+      o.headers['Content-Type'] ??= 'application/json';
+      o.headers['Accept'] ??= 'application/json';
+    } else if (a === '-F' || a === '--form') {
+      const [k, ...v] = next().split('=');
+      (o.form ||= new FormData()).append(k, v.join('='));
+    } else if (a === '-o' || a === '--output') o.out = next();
+    else if (a === '-O' || a === '--remote-name') o.remoteName = true;
+    else if (a === '-u' || a === '--user') o.user = next();
+    else if (a === '-A' || a === '--user-agent' || a === '-e' || a === '--referer' || a === '-m' || a === '--max-time' || a === '--connect-timeout' || a === '--retry') next();
+    else if (a === '-w' || a === '--write-out') o.writeOut = next();
+    else if (a === '-i' || a === '--include') o.include = true;
+    else if (a === '-I' || a === '--head') o.head = true;
+    else if (a === '-v' || a === '--verbose') o.verbose = true;
+    else if (a === '-f' || a === '--fail') o.fail = true;
+    else if (/^-[a-zA-Z]+$/.test(a) && a.length > 2) {
+      // combined short flags like -sSL, -fsSL, -sI
+      for (const f of a.slice(1)) {
+        if (f === 's') o.silent = true;
+        else if (f === 'i') o.include = true;
+        else if (f === 'I') o.head = true;
+        else if (f === 'f') o.fail = true;
+        else if (f === 'v') o.verbose = true;
+        else if (f === 'O') o.remoteName = true;
+      }
+    } else if (['-s', '--silent', '-S', '--show-error', '-L', '--location', '-k', '--insecure', '--compressed', '-#', '--progress-bar', '-N', '--no-buffer', '-g'].includes(a)) {
+      if (a === '-s' || a === '--silent') o.silent = true;
+    } else if (a.startsWith('-')) fail(`option ${a}: is unknown\ncurl: try 'curl --help' for more information`, 2);
+    else urls.push(a);
+  }
+  if (!urls.length) fail('no URL specified!\ncurl: try \'curl --help\' for more information', 2);
+  let status = 0;
+  for (const raw of urls) {
+    const url = withScheme(raw);
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      fail(`(3) URL rejected: Malformed input to a URL function`, 3);
+    }
+    if (parsed.protocol === 'http:' && location.protocol === 'https:') {
+      this.print(`curl: (7) This page is https, so the browser blocks plain http:// addresses. Try https://${parsed.host}${parsed.pathname}${parsed.search}\n`);
+      status = 7;
+      continue;
+    }
+    const method = o.method || (o.head ? 'HEAD' : o.data != null || o.form ? 'POST' : 'GET');
+    const headers = { ...o.headers };
+    if (o.data != null && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    if (o.user) headers['Authorization'] = 'Basic ' + btoa(o.user);
+    if (o.verbose) this.print(`> ${method} ${parsed.pathname}${parsed.search} HTTP/1.1\n> Host: ${parsed.host}\n` + Object.entries(headers).map(([k, v]) => `> ${k}: ${v}\n`).join('') + '>\n');
+    const ctrl = new AbortController();
+    this.running = { stdin() {}, eof() {}, kill: () => ctrl.abort() };
+    const t0 = performance.now();
+    let res;
+    try {
+      res = await fetch(url, { method, headers, body: method === 'GET' || method === 'HEAD' ? undefined : o.form || o.data, signal: ctrl.signal, redirect: 'follow' });
+    } catch (e) {
+      this.running = null;
+      if (ctrl.signal.aborted) return 130;
+      if (!o.silent || opts.wget) {
+        this.print(
+          opts.wget
+            ? `Connecting to ${parsed.host}... failed: the site didn't answer, or it doesn't let web pages read it (CORS).\n`
+            : `curl: (7) Failed to connect to ${parsed.host}: the site didn't answer, or it doesn't let web pages read it (CORS).\n` +
+                `      This terminal runs in your browser, so it can only reach sites that allow that, like most public APIs\n      (for example https://api.github.com, https://jsonplaceholder.typicode.com, https://wttr.in/?format=3).\n`,
+        );
+      }
+      status = 7;
+      continue;
+    }
+    const type = res.headers.get('content-type') || '';
+    const headerText = `HTTP/1.1 ${res.status} ${res.statusText || ''}`.trimEnd() + '\n' + [...res.headers].map(([k, v]) => `${k}: ${v}`).join('\n') + '\n\n';
+    if (o.verbose) this.print(headerText.replace(/^/gm, '< ').replace(/< $/, ''));
+    if (o.fail && res.status >= 400) {
+      this.running = null;
+      if (!o.silent || opts.wget) this.print(opts.wget ? `ERROR ${res.status}: ${res.statusText || 'Error'}.\n` : `curl: (22) The requested URL returned error: ${res.status}\n`);
+      status = 22;
+      continue;
+    }
+    if (o.head) {
+      this.print(headerText);
+      this.running = null;
+      continue;
+    }
+    let body;
+    let bytes;
+    try {
+      if (TEXT_TYPE.test(type) || /charset=/i.test(type)) body = await res.text();
+      else {
+        bytes = new Uint8Array(await res.arrayBuffer());
+        // no type, or unclear: treat as text if it decodes cleanly
+        try {
+          const t = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+          if (!/[\x00-\x08\x0e-\x1f]/.test(t.slice(0, 2000))) body = t;
+        } catch {}
+      }
+    } catch (e) {
+      this.running = null;
+      if (ctrl.signal.aborted) return 130;
+      this.print(`curl: (56) Failure when receiving data from the peer\n`);
+      status = 56;
+      continue;
+    }
+    this.running = null;
+    const size = body != null ? new TextEncoder().encode(body).length : bytes.length;
+    const outName = o.out || (o.remoteName ? decodeURIComponent(parsed.pathname.split('/').pop() || '') : null);
+    if (o.remoteName && !outName) fail('(23) Remote file name has no length!', 23);
+    if (outName) {
+      const p = this.at(outName);
+      checkName(p);
+      if (body != null && !(bytes && /\.(png|jpe?g|gif|webp|bmp|ico|avif)$/i.test(p))) this.vfs.set(p, body);
+      else if (/^image\//i.test(type) || /\.(png|jpe?g|gif|webp|bmp|ico|avif)$/i.test(p)) {
+        if (size > 2_200_000) fail(`(23) ${outName} is too big to keep (pictures can be up to about 2 MB)`, 23);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        this.vfs.set(p, `data:${type.split(';')[0] || 'image/png'};base64,${btoa(bin)}`);
+      } else fail(`(23) ${outName} is a binary file; only text files and pictures can be saved in the workspace`, 23);
+      if (!o.silent && !opts.wget) {
+        const secs = Math.max(0.001, (performance.now() - t0) / 1000);
+        const speed = String(Math.round(size / secs));
+        this.print(
+          '  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n' +
+            '                                 Dload  Upload   Total   Spent    Left  Speed\n' +
+            `100 ${String(size).padStart(6)}  100 ${String(size).padStart(6)}    0     0  ${speed.padStart(6)}      0 --:--:-- --:--:-- --:--:-- ${speed.padStart(6)}\n`,
+        );
+      }
+    } else {
+      if (o.include) this.print(headerText);
+      if (body != null) this.print(body);
+      else this.print(`Warning: Binary output can mess up your terminal. Use "--output FILE" to save it to a file.\n`);
+    }
+    if (o.writeOut) this.print(o.writeOut.replace(/%\{http_code\}/g, res.status).replace(/%\{size_download\}/g, size).replace(/%\{content_type\}/g, type).replace(/\\n/g, '\n'));
+  }
+  return status;
 }
 
 // ---------------------------------------------------------------------- npm --

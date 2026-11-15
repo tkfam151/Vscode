@@ -110,6 +110,20 @@ export function create(url, anonKey) {
       return data;
     },
 
+    // ---- announcements (teacher -> whole class) ----
+    async listAnnouncements(classId, limit = 50) {
+      return ok(await sb.rpc('class_announcements', { p_class: classId, p_limit: limit })) || [];
+    },
+
+    async postAnnouncement(classId, body) {
+      const row = ok(await sb.from('announcements').insert({ class_id: classId, body }).select('id, class_id, body, created_at').single());
+      return { id: row.id, classId: row.class_id, body: row.body, createdAt: row.created_at };
+    },
+
+    async deleteAnnouncement(id) {
+      ok(await sb.from('announcements').delete().eq('id', id));
+    },
+
     // ---- starter files (the teacher's model workspace for a class) ----
     async listStarterFiles(classId) {
       return ok(await sb.from('class_files').select('path, content').eq('class_id', classId));

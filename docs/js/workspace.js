@@ -87,8 +87,12 @@ async function main() {
   const isTeacher = info.role === 'teacher';
   // the terminal prompt shows who is typing, like "alice@SISB ~ %"
   const shellIdentity = {
-    user: (user.displayName || 'student').split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'student',
-    host: (SCHOOL_NAME || 'classcode').replace(/\s+/g, '-'),
+    // teachers: their whole name ("Ms Lee" -> mslee); students: their first name
+    user:
+      (user.role === 'student' ? (user.displayName || '').split(/\s+/)[0] : user.displayName || '').toLowerCase().replace(/[^a-z0-9._-]/g, '') ||
+      (user.role === 'student' ? 'student' : 'teacher'),
+    // staff: "mslee@SISBADMIN"; students: "alice@SISB"
+    host: (SCHOOL_NAME || 'classcode').replace(/\s+/g, '-') + (user.role === 'teacher' || user.role === 'admin' ? 'ADMIN' : ''),
     onOpen: (p) => {
       if (isTeacher) $('follow').checked = false;
       openFile(p);
@@ -1100,6 +1104,7 @@ async function main() {
       session.input(d);
     });
     classChannel.track({ workspaceId: wsId });
+    setupMessages();
 
     $('run').onclick = () => {
       runActive(session);
@@ -1161,6 +1166,79 @@ async function main() {
     };
     $('termnote').textContent = 'Try your starter code here. Students don\u2019t see this terminal.';
     session.start();
+  }
+
+  // ------------------------------------------------- messages from teacher --
+  // Broadcasts arrive live on the class channel; ones sent while the
+  // workspace was closed show when it opens (unread = newer than last seen).
+  function setupMessages() {
+    const seenKey = `classcode_seen_${info.classId}`;
+    const getSeen = () => {
+      try {
+        return localStorage.getItem(seenKey) || '';
+      } catch {
+        return '';
+      }
+    };
+    let all = [];
+    let shown = [];
+    const fmt = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    const draw = () => {
+      $('announceList').replaceChildren(
+        ...shown.map((a) => {
+          const li = document.createElement('li');
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = `${a.authorName || 'Teacher'} · ${fmt(a.createdAt)}`;
+          const text = document.createElement('div');
+          text.className = 'text';
+          text.textContent = a.body;
+          li.append(meta, text);
+          return li;
+        }),
+      );
+      $('announce').hidden = !shown.length;
+      $('msgBtn').hidden = !all.length;
+      $('msgBtn').classList.toggle('unread', all.some((a) => a.createdAt > getSeen()));
+    };
+    const markSeen = () => {
+      const newest = all.reduce((m, a) => (a.createdAt > m ? a.createdAt : m), getSeen());
+      try {
+        localStorage.setItem(seenKey, newest);
+      } catch {}
+    };
+    const close = () => {
+      markSeen();
+      shown = [];
+      draw();
+    };
+    $('announceOk').onclick = close;
+    $('announceClose').onclick = close;
+    $('msgBtn').onclick = () => {
+      shown = all.slice(0, 10);
+      draw();
+    };
+    classChannel.on('announce', (a) => {
+      if (!a || typeof a.body !== 'string' || all.some((x) => x.id === a.id)) return;
+      all = [a, ...all];
+      shown = [a, ...shown.filter((x) => x.id !== a.id)].slice(0, 5);
+      draw();
+    });
+    classChannel.on('unannounce', ({ id } = {}) => {
+      all = all.filter((a) => a.id !== id);
+      shown = shown.filter((a) => a.id !== id);
+      draw();
+    });
+    backend
+      .listAnnouncements(info.classId, 20)
+      .then((list) => {
+        all = [...all, ...list.filter((a) => !all.some((x) => x.id === a.id))].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        const seen = getSeen();
+        const unread = all.filter((a) => a.createdAt > seen).slice(0, 5);
+        if (unread.length) shown = unread;
+        draw();
+      })
+      .catch(() => {});
   }
 
   // -------------------------------------------------------------- teacher --

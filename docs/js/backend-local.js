@@ -207,6 +207,40 @@ export function create() {
       return { class: { id: c.id, name: c.name, joinCode: c.joinCode }, students };
     },
 
+    // ---- announcements ----
+    async listAnnouncements(classId, limit = 50) {
+      need();
+      const db = load();
+      const c = db.classes.find((x) => x.id === classId);
+      const member = c && (c.teacherId === me.id || me.role === 'admin' || db.enrollments.some((e) => e.classId === classId && e.studentId === me.id));
+      if (!member) return [];
+      return (db.announcements || [])
+        .filter((a) => a.classId === classId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, limit)
+        .map((a) => ({ ...a, authorName: db.users.find((u) => u.id === a.authorId)?.displayName || 'Teacher' }));
+    },
+
+    async postAnnouncement(classId, body) {
+      const db = load();
+      ownClass(db, classId);
+      body = String(body).trim();
+      if (!body || body.length > 2000) throw new Error('A message must be 1 to 2000 characters');
+      const a = { id: uid(), classId, authorId: me.id, body, createdAt: new Date().toISOString() };
+      (db.announcements ||= []).push(a);
+      save(db);
+      return { id: a.id, classId, body, createdAt: a.createdAt };
+    },
+
+    async deleteAnnouncement(id) {
+      const db = load();
+      const a = (db.announcements || []).find((x) => x.id === id);
+      if (!a) return;
+      ownClass(db, a.classId);
+      db.announcements = db.announcements.filter((x) => x.id !== id);
+      save(db);
+    },
+
     // ---- starter files ----
     async listStarterFiles(classId) {
       const db = load();

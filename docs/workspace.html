@@ -83,8 +83,14 @@
   <button id="formatBtn" class="stat" title="Tidy up the code's layout (Shift+Alt+F)">Format</button>
   <button id="wrapBtn" class="stat" title="Wrap long lines (Alt+Z)">Wrap: off</button>
   <span class="zoom"><button id="fontDown" class="stat" title="Smaller text (Ctrl+-)">A−</button><span id="fontSize"></span><button id="fontUp" class="stat" title="Bigger text (Ctrl+=)">A+</button></span>
+  <button id="msgBtn" class="stat" title="Messages from your teacher" hidden>📢 Messages</button>
   <button id="helpBtn" class="stat" title="Keyboard shortcuts">⌨ Shortcuts</button>
 </footer>
+<div id="announce" class="announce" role="alert" hidden>
+  <div class="announce-head"><strong>📢 Message from your teacher</strong><button id="announceClose" class="icon" title="Close">✕</button></div>
+  <ul id="announceList"></ul>
+  <div class="announce-foot"><button id="announceOk" class="btn primary small">Got it</button></div>
+</div>
 <div id="palette" class="overlay light" hidden>
   <div class="palette">
     <input id="paletteInput" placeholder="Type a file name to open it" autocomplete="off" spellcheck="false">

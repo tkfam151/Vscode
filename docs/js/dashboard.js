@@ -26,6 +26,14 @@ function showError(box, e) {
   box.hidden = false;
 }
 
+const when = (iso) => {
+  const d = new Date(iso);
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+const messageItem = (a, extra) =>
+  h('li', { class: 'msg' }, h('div', { class: 'msg-head' }, h('strong', {}, a.authorName || me?.displayName || 'Teacher'), h('span', { class: 'muted small' }, when(a.createdAt)), extra), h('div', { class: 'msg-body' }, a.body));
+
 const workspaceUrl = (id) => `workspace.html?ws=${encodeURIComponent(id)}`;
 
 // ------------------------------------------------------------------ auth --
@@ -124,6 +132,8 @@ function studentHome() {
 
   const load = async () => {
     const classes = await backend.listClasses();
+    // each class card shows the teacher's latest message
+    await Promise.all(classes.map(async (c) => (c.latest = (await backend.listAnnouncements(c.id, 1).catch(() => []))[0])));
     list.replaceChildren(
       ...(classes.length
         ? classes.map((c) =>
@@ -132,6 +142,7 @@ function studentHome() {
               { class: 'card' },
               h('h3', {}, c.name),
               h('p', { class: 'muted' }, `Teacher: ${c.teacherName}`),
+              c.latest && h('div', { class: 'latest' }, h('span', { class: 'small muted' }, `📢 ${c.latest.authorName} · ${when(c.latest.createdAt)}`), h('div', { class: 'msg-body' }, c.latest.body)),
               h('a', { class: 'btn primary', href: workspaceUrl(c.workspaceId) }, 'Open workspace'),
             ),
           )
@@ -238,6 +249,74 @@ function teacherClass(classId) {
     },
     'Give to students already in the class',
   );
+  // ---- broadcast a message to everyone in the class ----
+  const msgText = h('textarea', { rows: 3, maxlength: 2000, placeholder: 'Write a message to everyone in this class, e.g. "Open lesson3.py and finish the quiz before 10:30."' });
+  const msgList = h('ul', { class: 'msgs' });
+  const msgErr = errorBox();
+  let messages = [];
+  const drawMessages = () =>
+    msgList.replaceChildren(
+      ...(messages.length
+        ? messages.map((a) =>
+            messageItem(
+              a,
+              h(
+                'button',
+                {
+                  class: 'btn small danger',
+                  title: 'Delete this message for everyone',
+                  onclick: async () => {
+                    if (!confirm('Delete this message for everyone?')) return;
+                    try {
+                      await backend.deleteAnnouncement(a.id);
+                      channel.send('unannounce', { id: a.id });
+                      messages = messages.filter((m) => m.id !== a.id);
+                      drawMessages();
+                    } catch (e) {
+                      showError(msgErr, e);
+                    }
+                  },
+                },
+                'Delete',
+              ),
+            ),
+          )
+        : [h('li', { class: 'muted small' }, 'No messages sent yet.')]),
+    );
+  const sendBtn = h('button', { class: 'btn primary', type: 'submit' }, '📢 Send to class');
+  const msgForm = h(
+    'form',
+    {
+      class: 'broadcast',
+      onsubmit: async (ev) => {
+        ev.preventDefault();
+        const text = msgText.value.trim();
+        if (!text) return;
+        msgErr.hidden = true;
+        sendBtn.disabled = true;
+        try {
+          const a = { ...(await backend.postAnnouncement(classId, text)), authorName: me.displayName };
+          channel.send('announce', a); // students with the class open see it at once
+          messages = [a, ...messages];
+          msgText.value = '';
+          drawMessages();
+        } catch (e) {
+          showError(msgErr, e);
+        }
+        sendBtn.disabled = false;
+      },
+    },
+    msgText,
+    h('div', { class: 'row' }, sendBtn, h('span', { class: 'muted small' }, 'Students see it right away if their workspace is open, otherwise the next time they open it.')),
+  );
+  msgText.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) msgForm.requestSubmit();
+  });
+  const loadMessages = async () => {
+    messages = await backend.listAnnouncements(classId);
+    drawMessages();
+  };
+
   const title = h('h2', {}, 'Class');
   const code = h('code', { class: 'code big' });
   const body = h('tbody');
@@ -315,6 +394,7 @@ function teacherClass(classId) {
   };
 
   load().catch((e) => showError(err, e));
+  loadMessages().catch((e) => showError(msgErr, e));
   return page(
     h('p', {}, h('a', { href: '#' }, '← All classes')),
     h(
@@ -350,6 +430,7 @@ function teacherClass(classId) {
         copyBtn,
       ),
     ),
+    h('div', { class: 'card broadcast-card' }, h('h3', {}, 'Message the class'), msgForm, msgErr, msgList),
     err,
     h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Student'), h('th', {}, 'Workspace'), h('th', {}, ''))), body),
     empty,

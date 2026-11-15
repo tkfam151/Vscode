@@ -61,7 +61,18 @@ alter table public.files add constraint files_content_check check (octet_length(
 alter table public.class_files drop constraint if exists class_files_content_check;
 alter table public.class_files add constraint class_files_content_check check (octet_length(content) <= 3500000);
 
+-- Messages a teacher broadcasts to everyone in a class.
+create table if not exists public.announcements (
+  id uuid primary key default gen_random_uuid(),
+  class_id uuid not null references public.classes (id) on delete cascade,
+  author_id uuid references public.profiles (id) on delete set null default auth.uid(),
+  body text not null check (char_length(body) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+create index if not exists announcements_by_class on public.announcements (class_id, created_at desc);
+
 alter table public.profiles enable row level security;
+alter table public.announcements enable row level security;
 alter table public.class_files enable row level security;
 alter table public.classes enable row level security;
 alter table public.enrollments enable row level security;
@@ -200,6 +211,25 @@ end $$;
 drop trigger if exists classcode_limit_class_files on public.class_files;
 create trigger classcode_limit_class_files before insert on public.class_files
   for each row execute function public.limit_class_files();
+
+-- Announcements: the class's teacher (and admins) write them; the class reads them.
+create or replace function public.is_class_member(p_class uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select public.is_class_teacher(p_class)
+      or exists (select 1 from public.enrollments e where e.class_id = p_class and e.student_id = (select auth.uid()));
+$$;
+
+drop policy if exists "class reads announcements" on public.announcements;
+create policy "class reads announcements" on public.announcements for select to authenticated
+  using (public.is_class_member(class_id));
+
+drop policy if exists "teacher posts announcements" on public.announcements;
+create policy "teacher posts announcements" on public.announcements for insert to authenticated
+  with check (public.is_class_teacher(class_id) and author_id = (select auth.uid()));
+
+drop policy if exists "teacher deletes announcements" on public.announcements;
+create policy "teacher deletes announcements" on public.announcements for delete to authenticated
+  using (public.is_class_teacher(class_id));
 
 -- Keep one workspace from filling the database.
 create or replace function public.limit_workspace_files() returns trigger
@@ -354,6 +384,19 @@ begin
   return json_build_object('files', v_files, 'students', v_students);
 end $$;
 
+-- A class's announcements, newest first, with the author's name.
+create or replace function public.class_announcements(p_class uuid, p_limit int default 50) returns json
+language sql stable security definer set search_path = '' as $$
+  select coalesce(json_agg(json_build_object(
+           'id', a.id, 'classId', a.class_id, 'body', a.body, 'createdAt', a.created_at,
+           'authorName', coalesce(p.display_name, 'Teacher'))
+         order by a.created_at desc), '[]'::json)
+  from (select * from public.announcements
+        where class_id = p_class and public.is_class_member(p_class)
+        order by created_at desc limit least(greatest(p_limit, 1), 200)) a
+  left join public.profiles p on p.id = a.author_id;
+$$;
+
 -- Teacher and admin accounts, for the admin's "Manage teachers" page.
 -- status is 'invited' until the person has set their password from the email.
 create or replace function public.admin_list_staff() returns json
@@ -378,11 +421,16 @@ grant select, delete on public.classes to authenticated;
 grant select, delete on public.enrollments to authenticated;
 grant select, insert, update, delete on public.files to authenticated;
 grant select, insert, update, delete on public.class_files to authenticated;
+grant select, insert, delete on public.announcements to authenticated;
 
 revoke all on function public.handle_new_user() from public, anon, authenticated;
 revoke all on function public.limit_workspace_files() from public, anon, authenticated;
 revoke all on function public.limit_class_files() from public, anon, authenticated;
 revoke all on function public.copy_starter_files(uuid) from public, anon;
+revoke all on function public.class_announcements(uuid, int) from public, anon;
+revoke all on function public.is_class_member(uuid) from public, anon;
+grant execute on function public.class_announcements(uuid, int) to authenticated;
+grant execute on function public.is_class_member(uuid) to authenticated;
 grant execute on function public.copy_starter_files(uuid) to authenticated;
 revoke all on function public.create_class(text) from public, anon;
 revoke all on function public.join_class(text) from public, anon;
