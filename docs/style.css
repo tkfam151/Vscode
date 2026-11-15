@@ -79,6 +79,11 @@ select { font: inherit; color: inherit; background: var(--bg); border: 1px solid
 #bar .brand .logo { height: 26px; }
 .brand-title { flex-direction: column; align-items: flex-start; gap: 8px; }
 .brand-title .logo-big { height: 72px; width: auto; max-width: 100%; display: block; }
+/* The logo's lettering is dark: on dark backgrounds give it a white backing. */
+@media (prefers-color-scheme: dark) {
+  .brand .logo, .brand-title .logo-big { background: #fff; border-radius: 5px; padding: 3px 5px; box-sizing: content-box; }
+  .brand-title .logo-big { padding: 8px 12px; }
+}
 .brand { font-weight: 700; font-size: 18px; color: var(--text); text-decoration: none; }
 .spacer { flex: 1; }
 main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }

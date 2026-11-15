@@ -24,8 +24,16 @@ export function applyBrand(scope = document) {
     el.dataset.branded = '1';
     const big = el.classList.contains('brand-title');
     const text = document.createElement('span');
-    text.textContent = brandText;
-    el.replaceChildren(...[logo(big ? 'logo-big' : 'logo'), text].filter(Boolean));
+    const img = logo(big ? 'logo-big' : 'logo');
+    // The logo already shows the school's name, so beside it only the app name.
+    text.textContent = img ? APP_NAME || brandText : brandText;
+    if (img) {
+      img.onerror = () => {
+        img.remove(); // no logo file: show the full name instead
+        text.textContent = brandText;
+      };
+    }
+    el.replaceChildren(...[img, text].filter(Boolean));
   }
   if (SCHOOL_LOGO && !document.querySelector('link[rel="icon"]')) {
     const link = document.createElement('link');

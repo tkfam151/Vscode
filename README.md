@@ -38,7 +38,7 @@ export const SCHOOL_LOGO = 'logo.png';   // a file in the docs folder
 export const APP_NAME = 'ClassCode';
 ```
 
-To add it on GitHub: open the repository, go into the `docs` folder, choose **Add file → Upload files**, drop in the logo, name it `logo.png`, and commit to the branch your Pages site uses. Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
+The SISB logo is already included as `docs/logo.png`. Because the logo shows the school name, the header shows it next to just the app name ("ClassCode"); in dark mode the logo sits on a white background so the dark lettering stays readable. To replace it on GitHub: open the repository, go into the `docs` folder, choose **Add file → Upload files**, drop in the logo, name it `logo.png`, and commit to the branch your Pages site uses. Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
 
 ## What this is not
 
