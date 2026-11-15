@@ -10,15 +10,34 @@ A coding classroom that runs on **GitHub Pages + Supabase**. No server to rent o
 - **Admins can open every class and every student's workspace**, with the same abilities as the class's teacher.
 - **Workspaces close after 1 hour without activity.** The student has to reopen it each time; their files are kept.
 
-Students can run:
+Students can write any language (the editor colours 80+ languages, including Java, C, C++, C#, Go, Rust, Ruby and PHP). These run in the browser:
 
-| | How |
+| Language | Run with |
 | --- | --- |
-| **Python** | `python main.py`, an interactive `python` prompt, `input()`, reading and writing files |
-| **JavaScript** | `node app.js` |
-| **Web pages** | HTML/CSS/JS with a live preview pane |
-| **Shell basics** | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `echo > file`, `clear`, `help` |
-| **Folders** | Make folders with the 📁 button or `mkdir`. Select a folder and press **Run** (or type `python folder`, `node folder`, `preview folder`) to run its main file: `main.py`, `__main__.py`, `app.py`, `index.html`, `main.js` or `index.js`. Python runs inside that folder, so files next to each other can import each other. |
+| **Python** | **Run**, `python main.py`, an interactive `python` prompt, `input()`, reading and writing files, `pip install` |
+| **JavaScript** | **Run**, `node app.js` |
+| **TypeScript** | **Run**, `node app.ts` (compiled by the editor's built-in TypeScript) |
+| **HTML / CSS / JS web pages** | **Run** or `preview` shows the page in the preview pane |
+| **Markdown** | **Run** or `preview notes.md` shows it formatted |
+| **SQL (SQLite)** | **Run** on a `.sql` file prints result tables; `sqlite` opens an interactive `sqlite>` prompt. Each run starts with an empty database. |
+| **Lua** | **Run**, `lua game.lua` (Lua 5.3; `io.read` input isn't supported) |
+| **Shell scripts** | **Run**, `bash build.sh`: runs the terminal commands below, one per line |
+| **Shell basics** | `ls`, `cd`, `cat`, `mkdir`, `rm`, `mv`, `cp`, `echo > file`, `run FILE`, `clear`, `help` |
+| **Folders** | Make folders with the 📁 button or `mkdir`. Select a folder and press **Run** (or type `run folder`) to run its main file: `main.py`, `__main__.py`, `app.py`, `index.html`, `main.js`, `index.js`, `main.ts`, `main.lua`, `main.sql` or `main.sh`. Python runs inside that folder, so files next to each other can import each other. |
+
+Java, C, C++, C#, Go, Rust, Ruby, PHP and other compiled languages can be written and saved but not run here: pressing Run explains that. They need the server version ([SERVER.md](SERVER.md)).
+
+## School logo and name
+
+Set these in [`docs/config.js`](docs/config.js):
+
+```js
+export const SCHOOL_NAME = 'SISB';
+export const SCHOOL_LOGO = 'logo.png';   // a file in the docs folder
+export const APP_NAME = 'ClassCode';
+```
+
+Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
 
 ## What this is not
 

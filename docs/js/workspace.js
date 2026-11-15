@@ -16,12 +16,15 @@
 // class's starter files, which every student gets a copy of when they join.
 // No live channel; the terminal runs in the teacher's browser for trying things.
 
-/* global Terminal, FitAddon, monaco, require */
+/* global Terminal, FitAddon, monaco, require, marked */
 
 import { backend, demoMode } from './backend.js';
 import { IDLE_MINUTES } from '../config.js';
 import { VFS, entryFor } from './vfs.js';
-import { Session } from './shell.js';
+import { Session, commandFor } from './shell.js';
+import { applyBrand } from './brand.js';
+
+applyBrand();
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -136,7 +139,7 @@ async function main() {
     $('filename').textContent = path || 'No file open';
     renderFiles();
     if (announce && !isTeacher) channel.send('active', { path });
-    if (!$('preview').hidden && path && /\.html?$/i.test(path)) showPreview(path);
+    if (!$('preview').hidden && path && /\.(html?|md|markdown)$/i.test(path)) showPreview(path);
   }
 
   function renderFiles() {
@@ -252,7 +255,7 @@ async function main() {
   // -------------------------------------------------------------- preview --
   let previewPath = null;
   function showPreview(path) {
-    path ||= (active && /\.html?$/i.test(active) && active) || vfs.paths().find((p) => /\.html?$/i.test(p));
+    path ||= (active && /\.(html?|md|markdown)$/i.test(active) && active) || vfs.paths().find((p) => /\.html?$/i.test(p));
     $('preview').hidden = false;
     fit();
     if (!path || !vfs.has(path)) {
@@ -263,6 +266,16 @@ async function main() {
     }
     previewPath = path;
     $('previewName').textContent = `Preview · ${path}`;
+    if (/\.(md|markdown)$/i.test(path)) {
+      // Markdown: formatted in the same sandboxed frame (no access to this site).
+      const html = marked.parse(vfs.get(path));
+      $('previewFrame').srcdoc =
+        '<!doctype html><meta charset="utf-8"><style>body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:24px auto;padding:0 20px;color:#1c2333}' +
+        'pre{background:#f4f6fb;padding:12px;border-radius:6px;overflow:auto}code{font:14px ui-monospace,Menlo,Consolas,monospace;background:#f4f6fb;padding:1px 4px;border-radius:4px}' +
+        'pre code{padding:0}table{border-collapse:collapse}td,th{border:1px solid #dde2ee;padding:4px 10px}img{max-width:100%}blockquote{border-left:4px solid #dde2ee;margin:0;padding-left:14px;color:#667089}</style>' +
+        html;
+      return;
+    }
     // Inline the page's own CSS/JS files so it can run in a sandboxed frame with no access to this site.
     const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
     const local = (ref) => {
@@ -332,11 +345,23 @@ async function main() {
         return;
       }
     }
-    if (/\.py$/i.test(file)) session.runCommand(`python ${quote(file)}`);
-    else if (/\.(js|mjs)$/i.test(file)) session.runCommand(`node ${quote(file)}`);
-    else if (/\.(html?|css)$/i.test(file)) showPreview(/\.html?$/i.test(file) ? file : undefined);
-    else session.print(`\r\nDon't know how to run ${file}. Run .py, .js or .html files, or a folder with a main file.\r\n`);
+    const how = commandFor(file);
+    if (how instanceof Error) session.print(`\r\n${how.message}\r\n`);
+    else if (how === 'preview') showPreview(/\.css$/i.test(file) ? undefined : file);
+    // paths are relative to the terminal's folder, so use the full path if it has moved
+    else session.runCommand(`${how} ${quote(session.cwd ? '/' + file : file)}`);
   };
+  // TypeScript -> JavaScript with the editor's built-in compiler.
+  async function compileTs(path) {
+    const ts = monaco.typescript || monaco.languages.typescript;
+    const model = modelFor(path);
+    const getWorker = await ts.getTypeScriptWorker();
+    const worker = await getWorker(model.uri);
+    const output = await worker.getEmitOutput(model.uri.toString());
+    const js = output.outputFiles.find((f) => /\.js$/.test(f.name));
+    if (!js) throw new Error('no JavaScript was produced');
+    return js.text;
+  }
   const runTarget = () => (selected ? { path: selected.path, dir: selected.dir } : { path: active, dir: false });
   const runActive = (session) => {
     const t = runTarget();
@@ -444,7 +469,7 @@ async function main() {
       }, 60);
     };
 
-    const session = new Session({ write, vfs, onPreview: showPreview });
+    const session = new Session({ write, vfs, onPreview: showPreview, compileTs });
     term.onData((d) => session.input(d));
     // The snapshot already holds everything written so far, so drop output still waiting to be sent.
     const snapshot = () => {
@@ -514,7 +539,7 @@ async function main() {
 
   // -------------------------------------------------------------- starter --
   function starterMode() {
-    const session = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview });
+    const session = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview, compileTs });
     term.onData((d) => session.input(d));
     $('run').onclick = () => {
       runActive(session);
@@ -548,7 +573,7 @@ async function main() {
       clearTimeout(localTimer);
       if (local || online) return;
       term.reset();
-      local = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview });
+      local = new Session({ write: (d) => term.write(d), vfs, onPreview: showPreview, compileTs });
       local.start();
     };
     const stopLocal = () => {

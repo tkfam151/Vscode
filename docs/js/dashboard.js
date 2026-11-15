@@ -2,6 +2,7 @@
 
 import { backend, demoMode } from './backend.js';
 import { IDLE_MINUTES } from '../config.js';
+import { applyBrand } from './brand.js';
 
 const root = document.getElementById('app');
 let me = null;
@@ -55,7 +56,7 @@ function authView() {
           }
         },
       },
-      h('h1', {}, 'ClassCode'),
+      h('h1', { class: 'brand-title' }, 'ClassCode'),
       h('p', { class: 'muted' }, signup ? 'Create a student account.' : 'Write and run code in your browser, together with your class.'),
       signup && h('label', {}, 'Your name', h('input', { name: 'displayName', required: true, maxlength: 60, autocomplete: 'name' })),
       h('label', {}, 'Email', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'email' })),
@@ -481,6 +482,7 @@ function render() {
     view = m ? teacherClass(m[1]) : teacherHome();
   }
   root.replaceChildren(view);
+  applyBrand(root);
 }
 
 document.getElementById('demo').hidden = !demoMode;

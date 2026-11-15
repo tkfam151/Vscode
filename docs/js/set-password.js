@@ -1,6 +1,9 @@
 // Opened from an invite (or password reset) email: lets the person choose their own password.
 
 import { backend } from './backend.js';
+import { applyBrand } from './brand.js';
+
+applyBrand();
 
 const $ = (id) => document.getElementById(id);
 

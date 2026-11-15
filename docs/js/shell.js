@@ -3,17 +3,49 @@
 // Everything here runs in the student's own browser tab.
 
 import { entryFor } from './vfs.js';
+export { entryFor };
 
 const HELP = `Commands
-  python FILE.py      run a Python program        python        interactive Python
-  node FILE.js        run a JavaScript program    pip install X install a Python package
-  preview [FILE.html] show a web page in the preview pane
-  python FOLDER / node FOLDER / preview FOLDER   run a folder's main file
-                      (main.py, __main__.py, app.py, index.html, main.js or index.js)
+  python FILE.py      run Python                  python          interactive Python
+  node FILE.js|.ts    run JavaScript/TypeScript   pip install X   install a Python package
+  lua FILE.lua        run Lua                     sqlite [FILE.sql]  run SQL (SQLite)
+  bash FILE.sh        run a script of these commands, one per line
+  preview FILE        show a web page (.html) or Markdown (.md) in the preview pane
+  run FILE|FOLDER     run anything; a folder runs its main file (main.py, index.html, ...)
   ls [DIR]   cat FILE   cd DIR   pwd   mkdir DIR   touch FILE
   rm [-r] PATH   mv FROM TO   cp FROM TO   echo TEXT [> FILE]   clear   help
-Keys: Ctrl+C stops a running program, Up/Down recall earlier commands.
+Keys: Ctrl+C stops a running program, Ctrl+D ends input, Up/Down recall earlier commands.
 `;
+
+// How each kind of file runs. `cmd` is the terminal command; `preview` opens the preview pane.
+const LANGUAGES = [
+  { re: /\.py$/i, cmd: 'python' },
+  { re: /\.(js|mjs|cjs)$/i, cmd: 'node' },
+  { re: /\.(ts|mts)$/i, cmd: 'node' },
+  { re: /\.lua$/i, cmd: 'lua' },
+  { re: /\.sql$/i, cmd: 'sqlite' },
+  { re: /\.(sh|bash)$/i, cmd: 'bash' },
+  { re: /\.(html?|md|markdown|css)$/i, cmd: 'preview' },
+];
+// Languages the editor colours but this browser version cannot run.
+const EDIT_ONLY = {
+  java: 'Java', c: 'C', h: 'C', cpp: 'C++', cc: 'C++', hpp: 'C++', cs: 'C#', go: 'Go', rs: 'Rust', rb: 'Ruby',
+  php: 'PHP', kt: 'Kotlin', swift: 'Swift', r: 'R', scala: 'Scala', dart: 'Dart', pl: 'Perl', vb: 'Visual Basic',
+};
+
+/** The command that runs `path` (a file), or an Error explaining why it can't run. */
+export function commandFor(path) {
+  const lang = LANGUAGES.find((l) => l.re.test(path));
+  if (lang) return lang.cmd;
+  const ext = (path.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+  if (EDIT_ONLY[ext]) {
+    return new Error(`${EDIT_ONLY[ext]} can't run in the browser version of ClassCode (it needs a real computer to compile it). You can still write and save ${EDIT_ONLY[ext]} here.`);
+  }
+  return new Error(`Don't know how to run ${path}. Runnable: .py .js .ts .lua .sql .sh .html .md, or a folder with a main file.`);
+}
+
+const quoteArg = (p) => (/[\s"']/.test(p) ? JSON.stringify(p) : p);
+
 
 const crlf = (s) => s.replace(/\r?\n/g, '\r\n');
 
@@ -86,10 +118,12 @@ export class Session {
    * @param {import('./vfs.js').VFS} o.vfs
    * @param {(path: string) => void} o.onPreview
    */
-  constructor({ write, vfs, onPreview }) {
+  constructor({ write, vfs, onPreview, compileTs }) {
     this.write = write;
     this.vfs = vfs;
     this.onPreview = onPreview;
+    this.compileTs = compileTs; // (path) => Promise<javascript>, from the editor
+    this.queue = []; // commands waiting to run (from a bash script)
     this.cwd = '';
     this.line = '';
     this.history = [];
@@ -107,7 +141,15 @@ export class Session {
   prompt() {
     this.line = '';
     this.histPos = this.history.length;
-    if (!this.disposed) this.write(`\x1b[1;32m~${this.cwd ? '/' + this.cwd : ''}\x1b[0m $ `);
+    if (this.disposed) return;
+    if (this.queue.length) {
+      // next line of a bash script
+      const next = this.queue.shift();
+      this.write(`\x1b[2m+ ${next}\x1b[0m\r\n`);
+      setTimeout(() => this.exec(next, { fromScript: true }), 0);
+      return;
+    }
+    this.write(`\x1b[1;32m~${this.cwd ? '/' + this.cwd : ''}\x1b[0m $ `);
   }
 
   print(text) {
@@ -143,6 +185,7 @@ export class Session {
         }
       } else if (ch === '\x03') {
         this.write('^C\r\n');
+        this.queue.length = 0;
         if (this.running) this.running.kill();
         else this.prompt();
       } else if (ch === '\x04') {
@@ -182,10 +225,10 @@ export class Session {
     this.exec(cmd);
   }
 
-  async exec(raw) {
+  async exec(raw, { fromScript = false } = {}) {
     const line = raw.trim();
     if (!line) return this.prompt();
-    if (this.history[this.history.length - 1] !== line) this.history.push(line);
+    if (!fromScript && this.history[this.history.length - 1] !== line) this.history.push(line);
     if (this.history.length > 200) this.history.shift();
 
     // echo-style redirect: CMD > file / CMD >> file
@@ -287,7 +330,7 @@ export class Session {
         case 'preview':
         case 'open': {
           let p = at(args[0] || (vfs.has(at('index.html')) ? 'index.html' : '.'));
-          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.html?$/i, 'preview', 'index.html');
+          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.(html?|md|markdown)$/i, 'preview', 'index.html');
           if (!vfs.has(p)) throw new Error(`preview: ${args[0] || 'index.html'}: No such file`);
           this.onPreview(p);
           break;
@@ -308,12 +351,60 @@ export class Session {
           return this.runPython({ type: 'pip', packages: args.slice(1).filter((a) => !a.startsWith('-')) });
         }
         case 'node':
-        case 'js': {
-          if (!args[0]) throw new Error('Use: node FILE.js');
+        case 'js':
+        case 'ts-node':
+        case 'tsx':
+        case 'deno': {
+          if (!args[0]) throw new Error('Use: node FILE.js  or  node FILE.ts');
           let p = at(args[0]);
-          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.(js|mjs)$/i, 'node', 'main.js');
+          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.(js|mjs|cjs|ts|mts)$/i, 'node', 'main.js');
           if (!vfs.has(p)) throw new Error(`node: cannot find '${args[0]}'`);
           return this.runJs(p);
+        }
+        case 'lua': {
+          if (!args[0]) throw new Error('Use: lua FILE.lua');
+          let p = at(args[0]);
+          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.lua$/i, 'lua', 'main.lua');
+          if (!vfs.has(p)) throw new Error(`lua: cannot open ${args[0]}`);
+          return this.runLua(p);
+        }
+        case 'sqlite':
+        case 'sqlite3':
+        case 'sql': {
+          const file = args.find((a) => !a.startsWith('-'));
+          if (!file) return this.runSql(null);
+          let p = at(file);
+          if (!vfs.has(p) && vfs.isDir(p)) p = this.entryIn(p, /\.sql$/i, 'sqlite', 'main.sql');
+          if (!vfs.has(p)) throw new Error(`sqlite: cannot open ${file}`);
+          return this.runSql(p);
+        }
+        case 'bash':
+        case 'sh':
+        case 'source': {
+          if (!args[0]) throw new Error('Use: bash FILE.sh');
+          const p = at(args[0]);
+          if (!vfs.has(p)) throw new Error(`bash: ${args[0]}: No such file`);
+          const lines = vfs
+            .get(p)
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter((l) => l && !l.startsWith('#'));
+          if (lines.length > 500) throw new Error('bash: scripts can have at most 500 commands');
+          this.queue.unshift(...lines);
+          break;
+        }
+        case 'run': {
+          // run anything: picks the right command from the file type
+          const target = at(args[0] || '.');
+          let file = target;
+          if (!vfs.has(target)) {
+            if (!vfs.isDir(target)) throw new Error(`run: ${args[0]}: No such file or folder`);
+            file = entryFor(vfs, target);
+            if (!file) throw new Error(`run: ${target || '~'} is a folder with nothing to run. Add a main.py, index.html or main.js to it.`);
+          }
+          const how = commandFor(file);
+          if (how instanceof Error) throw how;
+          return this.exec(`${how} ${quoteArg('/' + file)} ${args.slice(1).map(quoteArg).join(' ')}`, { fromScript: true });
         }
         default:
           throw new Error(`${cmd}: command not found. Type help to see what this terminal can do.`);
@@ -394,7 +485,10 @@ export class Session {
   runJs(path) {
     const url = URL.createObjectURL(new Blob([JS_WORKER], { type: 'text/javascript' }));
     const worker = new Worker(url);
+    let finished = false;
     const finish = (after) => {
+      if (finished) return;
+      finished = true;
       worker.terminate();
       URL.revokeObjectURL(url);
       this.running = null;
@@ -406,7 +500,94 @@ export class Session {
       else if (data.type === 'done') finish();
     };
     this.running = { stdin: () => {}, eof: () => {}, kill: finish };
+    if (!/\.(ts|mts)$/i.test(path)) return worker.postMessage({ code: this.vfs.get(path), name: path });
+    // TypeScript: the editor's built-in compiler turns it into JavaScript first.
+    if (!this.compileTs) {
+      this.print('TypeScript is not available here.\n');
+      return finish();
+    }
+    this.compileTs(path).then(
+      (code) => !finished && worker.postMessage({ code, name: path }),
+      (e) => {
+        this.print(`Could not compile ${path}: ${e.message || e}\n`);
+        finish();
+      },
+    );
+  }
+
+  runLua(path) {
+    const worker = new Worker(new URL('./lua-worker.js', import.meta.url));
+    const finish = (after) => {
+      worker.terminate();
+      this.running = null;
+      this.prompt();
+      after?.then?.();
+    };
+    worker.onerror = (e) => {
+      this.print(`Lua stopped: ${e.message || 'error'}\n`);
+      finish();
+    };
+    worker.onmessage = ({ data }) => {
+      if (data.type === 'out') this.print(data.data);
+      else if (data.type === 'done') finish();
+    };
+    this.running = { stdin: () => {}, eof: () => {}, kill: finish };
     worker.postMessage({ code: this.vfs.get(path), name: path });
+  }
+
+  /** Run a .sql file, or (path null) an interactive sqlite> prompt. Each run starts with an empty database. */
+  runSql(path) {
+    const worker = new Worker(new URL('../vendor/sqljs/worker.sql-wasm.js', import.meta.url));
+    let pending = '';
+    let id = 0;
+    const finish = (after) => {
+      worker.terminate();
+      this.running = null;
+      this.prompt();
+      after?.then?.();
+    };
+    const exec = (sql) =>
+      new Promise((resolve) => {
+        const my = ++id;
+        worker.onmessage = ({ data }) => {
+          if (data.id !== my) return;
+          if (data.error) this.print(`Error: ${data.error}\n`);
+          else for (const r of data.results || []) this.print(sqlTable(r.columns, r.values));
+          resolve();
+        };
+        worker.postMessage({ id: my, action: 'exec', sql });
+      });
+    worker.onerror = (e) => {
+      this.print(`SQLite stopped: ${e.message || 'error'}\n`);
+      finish();
+    };
+    if (path) {
+      this.running = { stdin: () => {}, eof: () => {}, kill: finish };
+      exec(this.vfs.get(path)).then(() => this.running && finish());
+      return;
+    }
+    this.print('SQLite (in-memory database). End statements with ; — type .tables, or .exit to leave.\n');
+    const ask = () => this.write(pending ? '   ...> ' : 'sqlite> ');
+    this.running = {
+      kill: finish,
+      eof: () => finish(),
+      stdin: async (line) => {
+        const t = line.trim();
+        if (!pending && (t === '.exit' || t === '.quit')) return finish();
+        if (!pending && t === '.tables') {
+          await exec("select name from sqlite_master where type = 'table' order by name;");
+          return ask();
+        }
+        pending += line + '\n';
+        if (t.endsWith(';')) {
+          const sql = pending;
+          pending = '';
+          await exec(sql);
+        }
+        if (this.running) ask();
+      },
+    };
+    ask();
   }
 
   dispose() {
@@ -414,6 +595,17 @@ export class Session {
     if (this.running) this.running.kill();
     this.killPython();
   }
+}
+
+/** Format query results as a text table. */
+function sqlTable(columns, rows) {
+  const cell = (v) => (v === null ? 'NULL' : v instanceof Uint8Array ? `<${v.length} bytes>` : String(v));
+  const data = rows.map((r) => r.map(cell));
+  const widths = columns.map((c, i) => Math.min(40, Math.max(c.length, ...data.map((r) => r[i].length))));
+  const fit = (s, w) => (s.length > w ? s.slice(0, w - 1) + '…' : s.padEnd(w));
+  const line = '+' + widths.map((w) => '-'.repeat(w + 2)).join('+') + '+\n';
+  const row = (r) => '| ' + r.map((v, i) => fit(v, widths[i])).join(' | ') + ' |\n';
+  return line + row(columns) + line + data.map(row).join('') + line + `(${rows.length} row${rows.length === 1 ? '' : 's'})\n`;
 }
 
 function checkName(path) {

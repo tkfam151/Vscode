@@ -134,11 +134,11 @@ export class VFS {
  */
 export function entryFor(vfs, dir) {
   const prefix = dir ? dir + '/' : '';
-  for (const name of ['main.py', '__main__.py', 'app.py', 'index.html', 'main.js', 'index.js', 'app.js']) {
+  for (const name of ['main.py', '__main__.py', 'app.py', 'index.html', 'main.js', 'index.js', 'app.js', 'main.ts', 'index.ts', 'main.lua', 'main.sql', 'main.sh', 'index.md', 'README.md']) {
     if (vfs.has(prefix + name)) return prefix + name;
   }
   const here = vfs.list(dir).filter((e) => !e.dir).map((e) => prefix + e.name);
-  for (const re of [/\.py$/i, /\.(js|mjs)$/i, /\.html?$/i]) {
+  for (const re of [/\.py$/i, /\.(js|mjs)$/i, /\.html?$/i, /\.ts$/i, /\.lua$/i, /\.sql$/i, /\.sh$/i]) {
     const matches = here.filter((p) => re.test(p));
     if (matches.length === 1) return matches[0];
   }
