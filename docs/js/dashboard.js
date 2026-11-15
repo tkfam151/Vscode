@@ -35,6 +35,17 @@ const when = (iso) => {
 const messageItem = (a, extra) =>
   h('li', { class: 'msg' }, h('div', { class: 'msg-head' }, h('strong', {}, a.authorName || me?.displayName || 'Teacher'), h('span', { class: 'muted small' }, when(a.createdAt)), extra), h('div', { class: 'msg-body' }, a.body));
 
+// a teacher's own workspace in a class (made the first time)
+async function openMyWorkspace(classId, button) {
+  if (button) button.disabled = true;
+  try {
+    location.href = workspaceUrl(await backend.teacherWorkspace(classId));
+  } catch (e) {
+    if (button) button.disabled = false;
+    alert(e.message);
+  }
+}
+
 const workspaceUrl = (id) => `workspace.html?ws=${encodeURIComponent(id)}`;
 
 // ------------------------------------------------------------------ auth --
@@ -510,6 +521,18 @@ function teacherClass(classId) {
       { class: 'row spread' },
       title,
       h(
+        'div',
+        { class: 'row' },
+        h(
+          'button',
+          {
+            class: 'btn primary',
+            title: 'Your own workspace in this class, for demos and trying things out. Students don\'t see it.',
+            onclick: (ev) => openMyWorkspace(classId, ev.currentTarget),
+          },
+          '🧑‍🏫 My workspace',
+        ),
+      h(
         'button',
         {
           class: 'btn danger',
@@ -524,6 +547,7 @@ function teacherClass(classId) {
           },
         },
         'Delete class',
+      ),
       ),
     ),
     h('div', { class: 'card joinbox' }, h('span', {}, 'Students join with this code:'), code),

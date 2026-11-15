@@ -166,14 +166,14 @@ export function create() {
             id: c.id,
             name: c.name,
             joinCode: c.joinCode,
-            studentCount: db.enrollments.filter((e) => e.classId === c.id).length,
+            studentCount: db.enrollments.filter((e) => e.classId === c.id && (e.kind || 'student') === 'student').length,
             teacherName: db.users.find((u) => u.id === c.teacherId)?.displayName || '',
             mine: c.teacherId === me.id,
           }))
           .sort((a, b) => Number(b.mine) - Number(a.mine));
       }
       return db.enrollments
-        .filter((e) => e.studentId === me.id)
+        .filter((e) => e.studentId === me.id && (e.kind || 'student') === 'student')
         .map((e) => {
           const c = db.classes.find((x) => x.id === e.classId);
           const t = db.users.find((u) => u.id === c.teacherId);
@@ -211,7 +211,7 @@ export function create() {
       const c = db.classes.find((x) => x.id === classId && (x.teacherId === me.id || me.role === 'admin'));
       if (!c) throw new Error('Class not found');
       const students = db.enrollments
-        .filter((e) => e.classId === classId)
+        .filter((e) => e.classId === classId && (e.kind || 'student') === 'student')
         .map((e) => ({ workspaceId: e.id, studentId: e.studentId, displayName: db.users.find((u) => u.id === e.studentId)?.displayName || '' }))
         .sort((a, b) => a.displayName.localeCompare(b.displayName));
       return { class: { id: c.id, name: c.name, joinCode: c.joinCode }, students };
@@ -277,7 +277,7 @@ export function create() {
       ownClass(db, classId);
       let files = 0;
       let students = 0;
-      for (const e of db.enrollments.filter((x) => x.classId === classId)) {
+      for (const e of db.enrollments.filter((x) => x.classId === classId && (x.kind || 'student') === 'student')) {
         const mine = (db.files[e.id] ||= {});
         let added = 0;
         for (const [path, content] of Object.entries(db.classFiles?.[classId] || {})) {
@@ -288,6 +288,20 @@ export function create() {
       }
       save(db);
       return { files, students };
+    },
+
+    // the teacher's own workspace in a class (made on first use, with the starter files)
+    async teacherWorkspace(classId) {
+      const db = load();
+      ownClass(db, classId);
+      let e = db.enrollments.find((x) => x.classId === classId && x.studentId === me.id);
+      if (!e) {
+        e = { id: uid(), classId, studentId: me.id, kind: 'teacher' };
+        db.enrollments.push(e);
+        db.files[e.id] = { ...(db.classFiles?.[classId] || {}) };
+        save(db);
+      }
+      return e.id;
     },
 
     async joinClass(code) {
@@ -324,6 +338,7 @@ export function create() {
         studentId: a.e.studentId,
         studentName: db.users.find((u) => u.id === a.e.studentId)?.displayName || '',
         role: a.role,
+        kind: a.e.kind || 'student',
       };
     },
 

@@ -8,6 +8,7 @@ A coding classroom that runs on **GitHub Pages + Supabase**. No server to rent o
 - **Students raise a hand (✋)** when they need help: the teacher's class page shows who, sorted to the top (and counted in the browser tab), and the teacher can lower it, which tells the student they've been seen.
 - **Teachers download everyone's work** for a class as one `.zip`, with a folder per student, for marking.
 - **"Forgot password?"** on the sign-in page emails a link to choose a new password (needs the email setup below).
+- **Teachers have their own workspace in every class** (**🧑‍🏫 My workspace** on the class page), for demos and trying things out. It starts with the model workspace's files, keeps its own changes, and isn't shown to students or counted as one.
 - **Each class has a model workspace**: starter files the teacher writes (and can try out in their own terminal). Every student who joins the class gets their own copy. A button also gives the files to students who joined earlier; it only adds files a student doesn't have, so it never overwrites a student's work.
 - **Students** create their own account, join with the code, and get their own workspace: a VS Code-style editor, a terminal, and a web-page preview.
 - **Teachers watch any student's terminal live**, can type into it, and can **edit the student's files and press Run**. When the student isn't there, the teacher can still open the workspace, edit and run the code (it runs in the teacher's own browser).

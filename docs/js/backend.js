@@ -23,9 +23,11 @@
 //   listAnnouncements(classId) -> [{ id, classId, body, createdAt, authorName }]   newest first; class members
 //   postAnnouncement(classId, body) -> { id, classId, body, createdAt }            teacher/admin
 //   deleteAnnouncement(id)                                                          teacher/admin
+//   teacherWorkspace(classId) -> workspaceId          the teacher's own workspace in the class (made on first use)
 //   joinClass(code)      a new student starts with a copy of the starter files
 //   removeStudent(workspaceId)
-//   getWorkspace(id) -> { id, classId, className, studentId, studentName, role: 'student' | 'teacher' }
+//   getWorkspace(id) -> { id, classId, className, studentId, studentName, role: 'student' | 'teacher', kind: 'student' | 'teacher' }
+//                        role = the viewer's relation to it; kind 'teacher' = a teacher's own workspace
 //   listFiles(workspaceId) -> [{ path, content }]
 //   saveFile(workspaceId, path, content)
 //   deleteFile(workspaceId, path)

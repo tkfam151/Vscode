@@ -99,10 +99,18 @@ async function main() {
     },
   };
   const isStarter = info.role === 'starter';
+  // a teacher's own workspace in the class (opened by that teacher)
+  const ownTeacherSpace = info.kind === 'teacher' && info.role === 'student';
 
   document.title = `${info.studentName} · ${info.className}`;
   $('who').textContent = `${info.className} · ${info.studentName}`;
   $('teacherBadge').hidden = !isTeacher && !isStarter;
+  if (ownTeacherSpace) {
+    $('teacherBadge').hidden = false;
+    $('teacherBadge').textContent = 'My workspace';
+    $('who').textContent = `${info.className} · ${info.studentName} (teacher)`;
+    document.querySelector('#bar a.btn[href="./"]').href = `./#/class/${encodeURIComponent(info.classId)}`;
+  }
   if (isStarter) {
     $('teacherBadge').textContent = 'Model workspace';
     document.querySelector('#bar a.btn[href="./"]').href = `./#/class/${encodeURIComponent(starterClass)}`;
@@ -1183,13 +1191,13 @@ async function main() {
       $('handBtn').lastChild.textContent = hand ? ' Hand raised' : ' Ask for help';
       if (note) $('termnote').textContent = note;
     };
-    $('handBtn').hidden = false;
+    $('handBtn').hidden = ownTeacherSpace; // teachers don't raise hands in their own workspace
     $('handBtn').onclick = () => setHand(!hand, hand ? '' : 'Your teacher can see your raised hand.');
     classChannel.on('lower-hand', ({ workspaceId } = {}) => {
       if (workspaceId === wsId && hand) setHand(false, 'Your teacher has seen your raised hand.');
     });
     setHand(false);
-    setupMessages();
+    if (!ownTeacherSpace) setupMessages();
 
     $('run').onclick = () => {
       runActive(session);

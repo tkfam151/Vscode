@@ -71,6 +71,11 @@ create table if not exists public.announcements (
 );
 create index if not exists announcements_by_class on public.announcements (class_id, created_at desc);
 
+-- A teacher's own workspace in a class is an enrollment of kind 'teacher'.
+alter table public.enrollments add column if not exists kind text not null default 'student';
+alter table public.enrollments drop constraint if exists enrollments_kind_check;
+alter table public.enrollments add constraint enrollments_kind_check check (kind in ('student', 'teacher'));
+
 alter table public.profiles enable row level security;
 alter table public.announcements enable row level security;
 alter table public.class_files enable row level security;
@@ -216,7 +221,7 @@ create trigger classcode_limit_class_files before insert on public.class_files
 create or replace function public.is_class_member(p_class uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select public.is_class_teacher(p_class)
-      or exists (select 1 from public.enrollments e where e.class_id = p_class and e.student_id = (select auth.uid()));
+      or exists (select 1 from public.enrollments e where e.class_id = p_class and e.student_id = (select auth.uid()) and e.kind = 'student');
 $$;
 
 drop policy if exists "class reads announcements" on public.announcements;
@@ -329,7 +334,7 @@ language sql stable security definer set search_path = '' as $$
     when public.is_staff() then (
       select coalesce(json_agg(json_build_object(
                'id', c.id, 'name', c.name, 'joinCode', c.join_code,
-               'studentCount', (select count(*) from public.enrollments e where e.class_id = c.id),
+               'studentCount', (select count(*) from public.enrollments e where e.class_id = c.id and e.kind = 'student'),
                'teacherName', t.display_name, 'mine', c.teacher_id = (select auth.uid()))
              order by (c.teacher_id = (select auth.uid())) desc, c.created_at desc), '[]'::json)
       from public.classes c join public.profiles t on t.id = c.teacher_id
@@ -341,7 +346,7 @@ language sql stable security definer set search_path = '' as $$
       from public.enrollments e
       join public.classes c on c.id = e.class_id
       join public.profiles t on t.id = c.teacher_id
-      where e.student_id = (select auth.uid()))
+      where e.student_id = (select auth.uid()) and e.kind = 'student')
   end;
 $$;
 
@@ -354,7 +359,7 @@ language sql stable security definer set search_path = '' as $$
                'workspaceId', e.id, 'studentId', s.id, 'displayName', s.display_name)
              order by lower(s.display_name)), '[]'::json)
       from public.enrollments e join public.profiles s on s.id = e.student_id
-      where e.class_id = c.id))
+      where e.class_id = c.id and e.kind = 'student'))
   from public.classes c
   where c.id = p_class and public.is_class_teacher(c.id);
 $$;
@@ -364,12 +369,32 @@ language sql stable security definer set search_path = '' as $$
   select json_build_object(
     'id', e.id, 'classId', c.id, 'className', c.name,
     'studentId', s.id, 'studentName', s.display_name,
-    'role', public.workspace_role(e.id))
+    'role', public.workspace_role(e.id), 'kind', e.kind)
   from public.enrollments e
   join public.classes c on c.id = e.class_id
   join public.profiles s on s.id = e.student_id
   where e.id = p_ws and public.workspace_role(e.id) is not null;
 $$;
+
+-- The calling teacher's (or admin's) own workspace in a class, made on first
+-- use with a copy of the starter files. Returns its id.
+create or replace function public.teacher_workspace(p_class uuid) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_ws uuid;
+begin
+  if not public.is_class_teacher(p_class) then
+    raise exception 'Class not found';
+  end if;
+  select e.id into v_ws from public.enrollments e where e.class_id = p_class and e.student_id = (select auth.uid());
+  if v_ws is null then
+    insert into public.enrollments (class_id, student_id, kind) values (p_class, (select auth.uid()), 'teacher')
+    returning id into v_ws;
+    insert into public.files (workspace_id, path, content)
+    select v_ws, cf.path, cf.content from public.class_files cf where cf.class_id = p_class;
+  end if;
+  return v_ws;
+end $$;
 
 -- Give the starter files to students who are already in the class. Only adds
 -- files a student doesn't have; never overwrites a student's own work.
@@ -386,7 +411,7 @@ begin
     insert into public.files (workspace_id, path, content)
     select e.id, cf.path, cf.content
     from public.enrollments e join public.class_files cf on cf.class_id = e.class_id
-    where e.class_id = p_class
+    where e.class_id = p_class and e.kind = 'student'
     on conflict (workspace_id, path) do nothing
     returning workspace_id
   )
@@ -437,6 +462,8 @@ revoke all on function public.handle_new_user() from public, anon, authenticated
 revoke all on function public.limit_workspace_files() from public, anon, authenticated;
 revoke all on function public.limit_class_files() from public, anon, authenticated;
 revoke all on function public.copy_starter_files(uuid) from public, anon;
+revoke all on function public.teacher_workspace(uuid) from public, anon;
+grant execute on function public.teacher_workspace(uuid) to authenticated;
 revoke all on function public.class_announcements(uuid, int) from public, anon;
 revoke all on function public.is_class_member(uuid) from public, anon;
 grant execute on function public.class_announcements(uuid, int) to authenticated;

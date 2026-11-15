@@ -158,6 +158,10 @@ export function create(url, anonKey) {
       return ok(await sb.rpc('copy_starter_files', { p_class: classId }));
     },
 
+    async teacherWorkspace(classId) {
+      return ok(await sb.rpc('teacher_workspace', { p_class: classId }));
+    },
+
     async joinClass(code) {
       ok(await sb.rpc('join_class', { p_code: code }));
     },
