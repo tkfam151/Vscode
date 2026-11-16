@@ -37,17 +37,18 @@ Java, C, C++, C#, Go, Rust, Ruby, PHP and other compiled languages can be writte
 
 **About packages:** pip and npm download real packages from the internet (PyPI through Pyodide, and npm through the jsDelivr CDN), so the school network must allow `pypi.org`, `files.pythonhosted.org` and `cdn.jsdelivr.net`. In the browser, pip can install pure-Python packages plus the science packages Pyodide provides (numpy, pandas, matplotlib, scikit-learn, …), and npm packages work when they run in a browser (lodash, dayjs, date, maths and text libraries, validators, …). Packages that need a real computer, such as web servers (express), database drivers or anything with compiled parts, don't. Tools like git, apt, brew, gcc and java show a clear "not available here" message, and so do terminal programs from npm such as `icoa-cli` (`npm i icoa-cli` still records it, with a note). **For `icoa-cli`, Homebrew and anything else that needs a real computer, use the server version**: there every student has a real Linux terminal with Node.js 22, npm, Python, git and compilers, where `npm i -g icoa-cli` and the official Homebrew install command work (see [SERVER.md](SERVER.md)).
 
-## School logo and name
+## Logo and name
 
 Set these in [`docs/config.js`](docs/config.js):
 
 ```js
-export const SCHOOL_NAME = 'SISB';
-export const SCHOOL_LOGO = 'logo.png';   // a file in the docs folder
-export const APP_NAME = 'ClassCode';
+export const APP_NAME = 'ClassCode';      // shown next to the logo and in the browser tab
+export const SCHOOL_LOGO = 'logo.png';    // a file in the docs folder
+export const SITE_ICON = 'favicon.png';   // the browser-tab icon
+export const SCHOOL_NAME = 'SISB';        // used in the terminal prompt: alice@SISB, tonkla@SISBADMIN
 ```
 
-The SISB logo is already included as `docs/logo.png`. Because the logo shows the school name, the header shows it next to just the app name ("ClassCode"). To replace it on GitHub: open the repository, go into the `docs` folder, choose **Add file → Upload files**, drop in the logo, name it `logo.png`, and commit to the branch your Pages site uses. Upload your logo to the `docs` folder with that file name (PNG, SVG or JPG; a square or wide logo about 200px tall works well). It appears on the sign-in screen, in every page header and as the browser-tab icon. Until the file is there, the name is shown as text.
+The ClassCode logo (`docs/logo.png`) and tab icon (`docs/favicon.png`) are included. To replace one on GitHub: open the `docs` folder, choose **Add file → Upload files**, upload a file with the same name, and commit to the branch your Pages site uses. A PNG with a transparent background, about 200–250 px tall, works best. If the logo file is missing, the name is shown as text.
 
 ## The workspace
 
@@ -157,7 +158,7 @@ Browser        runs the student's code
 | --- | --- |
 | `docs/` | The GitHub Pages site |
 | `docs/config.js` | Supabase details, idle timeout, school name and logo |
-| `docs/logo.png` | The school logo |
+| `docs/logo.png`, `docs/favicon.png` | The logo and the browser-tab icon |
 | `docs/js/` | Dashboard, workspace page, terminal (`shell.js`), program runners (`py-worker.js`, `node-worker.js`, `lua-worker.js`), data layers |
 | `docs/vendor/` | Bundled libraries: Monaco editor, xterm.js, Pyodide, supabase-js, marked, sql.js, Fengari (see `docs/vendor/README.md`) |
 | `supabase/schema.sql` | Tables, access rules and functions |

@@ -1,14 +1,14 @@
-// School branding (logo + name from config.js) for headers, the sign-in card and the tab icon.
+// Branding (logo + name from config.js) for headers, the sign-in card and the tab icon.
 
-import { SCHOOL_NAME, SCHOOL_LOGO, APP_NAME } from '../config.js';
+import { SCHOOL_LOGO, APP_NAME, SITE_ICON } from '../config.js';
 
-export const brandText = [SCHOOL_NAME, APP_NAME].filter(Boolean).join(' ');
+export const brandText = APP_NAME || 'ClassCode';
 
 function logo(cls) {
   if (!SCHOOL_LOGO) return null;
   const img = document.createElement('img');
   img.src = SCHOOL_LOGO;
-  img.alt = SCHOOL_NAME ? `${SCHOOL_NAME} logo` : '';
+  img.alt = `${brandText} logo`;
   img.className = cls;
   img.onerror = () => img.remove(); // no logo file yet: just the name
   return img;
@@ -25,8 +25,7 @@ export function applyBrand(scope = document) {
     const big = el.classList.contains('brand-title');
     const text = document.createElement('span');
     const img = logo(big ? 'logo-big' : 'logo');
-    // The logo already shows the school's name, so beside it only the app name.
-    text.textContent = img ? APP_NAME || brandText : brandText;
+    text.textContent = brandText;
     if (img) {
       img.onerror = () => {
         img.remove(); // no logo file: show the full name instead
@@ -35,10 +34,11 @@ export function applyBrand(scope = document) {
     }
     el.replaceChildren(...[img, text].filter(Boolean));
   }
-  if (SCHOOL_LOGO && !document.querySelector('link[rel="icon"]')) {
+  const icon = SITE_ICON || SCHOOL_LOGO;
+  if (icon && !document.querySelector('link[rel="icon"]')) {
     const link = document.createElement('link');
     link.rel = 'icon';
-    link.href = SCHOOL_LOGO;
+    link.href = icon;
     document.head.append(link);
   }
   if (!document.title.includes(brandText)) document.title = document.title.replace(/ClassCode/g, brandText);
