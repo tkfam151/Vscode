@@ -152,6 +152,16 @@ Browser        runs the student's code
 - **When a teacher and student type in the same file at once**, both edits are kept, but if they type on the same line at the same moment the result can be jumbled. In practice, take turns on a line.
 - **Supabase free plan limits** apply (database size, simultaneous live connections, messages per month). A typical single class is well inside them; check Supabase's pricing page if you plan to run many classes at once.
 
+## Updating the site
+
+Every page loads its files with a version tag (`?v=...`), so after an update browsers fetch the new files instead of reusing old copies. If you change files in `docs/` yourself, run this before committing so the tag changes:
+
+```bash
+node tools/stamp-version.mjs
+```
+
+(GitHub Pages also tells browsers to keep each page for up to 10 minutes, so a just-published change can take a few minutes, or a hard reload, to appear.)
+
 ## Repository layout
 
 | Path | What |
@@ -161,6 +171,7 @@ Browser        runs the student's code
 | `docs/logo.png`, `docs/favicon.png` | The logo and the browser-tab icon |
 | `docs/js/` | Dashboard, workspace page, terminal (`shell.js`), program runners (`py-worker.js`, `node-worker.js`, `lua-worker.js`), data layers |
 | `docs/vendor/` | Bundled libraries: Monaco editor, xterm.js, Pyodide, supabase-js, marked, sql.js, Fengari (see `docs/vendor/README.md`) |
+| `tools/stamp-version.mjs` | Adds version tags to the site's files (run after changing `docs/`) |
 | `supabase/schema.sql` | Tables, access rules and functions |
 | `supabase/functions/admin-users/` | Edge Function: invite, resend and remove teacher accounts |
 | `server.js`, `src/`, `public/`, `test/` | The separate server version ([SERVER.md](SERVER.md)) |

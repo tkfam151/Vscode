@@ -3,11 +3,13 @@
 import { SCHOOL_LOGO, APP_NAME, SITE_ICON } from '../config.js';
 
 export const brandText = APP_NAME || 'ClassCode';
+// same version tag as this file, so a new logo shows right after an update
+const v = new URL(import.meta.url).search;
 
 function logo(cls) {
   if (!SCHOOL_LOGO) return null;
   const img = document.createElement('img');
-  img.src = SCHOOL_LOGO;
+  img.src = SCHOOL_LOGO + v;
   img.alt = `${brandText} logo`;
   img.className = cls;
   img.onerror = () => img.remove(); // no logo file yet: just the name
@@ -38,7 +40,7 @@ export function applyBrand(scope = document) {
   if (icon && !document.querySelector('link[rel="icon"]')) {
     const link = document.createElement('link');
     link.rel = 'icon';
-    link.href = icon;
+    link.href = icon + v;
     document.head.append(link);
   }
   if (!document.title.includes(brandText)) document.title = document.title.replace(/ClassCode/g, brandText);

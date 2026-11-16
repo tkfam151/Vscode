@@ -65,6 +65,14 @@ export function commandFor(path) {
   return new Error(`Don't know how to run ${path}. Runnable: .py .js .ts .lua .sql .sh .html .md, or a folder with a main file.`);
 }
 
+// Worker scripts get the same version tag as this file (see tools/stamp-version.mjs),
+// so browsers don't run an old copy after an update.
+const versioned = (rel) => {
+  const u = new URL(rel, import.meta.url);
+  u.search = new URL(import.meta.url).search;
+  return u;
+};
+
 const crlf = (s) => s.replace(/\r?\n/g, '\r\n');
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const quoteArg = (p) => (/[\s"'$&|;<>*?]/.test(p) ? "'" + p.replace(/'/g, `'\\''`) + "'" : p);
@@ -704,7 +712,7 @@ export class Session {
 
   ensurePyWorker() {
     if (!this.pyWorker) {
-      this.pyWorker = new Worker(new URL('./py-worker.js', import.meta.url), { type: 'module' });
+      this.pyWorker = new Worker(versioned('./py-worker.js'), { type: 'module' });
       this.pyFresh = true;
     }
     return this.pyWorker;
@@ -752,7 +760,7 @@ export class Session {
         fail(`could not compile ${entry}: ${e.message || e}`);
       }
     }
-    const worker = new Worker(new URL('./node-worker.js', import.meta.url), { type: 'module' });
+    const worker = new Worker(versioned('./node-worker.js'), { type: 'module' });
     const files = this.vfs.entries();
     if (source != null) {
       const i = files.findIndex(([p]) => p === entry);
@@ -787,7 +795,7 @@ export class Session {
   }
 
   runLua(path) {
-    const worker = new Worker(new URL('./lua-worker.js', import.meta.url));
+    const worker = new Worker(versioned('./lua-worker.js'));
     const done = this.attach(
       worker,
       (data, end) => {
